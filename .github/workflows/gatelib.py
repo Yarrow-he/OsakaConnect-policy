@@ -134,12 +134,13 @@ def fetch(policy_dir, ind, fetchd):
         cfg[k] = yaml_json(open(os.path.join(policy_dir, fn)).read())
     main_sha = api("GET", f"repos/{BIZ}/commits/main", tok)["sha"]
     pending = "" if state.get("paused") else pending_reason(state, tok)
+    main_board = None if state.get("paused") else board_at(main_sha, tok)   # scope 名单只认 main 上已合并的那份
     os.makedirs(os.path.join(ind, "prs"), exist_ok=True)
     os.makedirs(fetchd, exist_ok=True)
     listed = []
     for p in pages(f"repos/{BIZ}/pulls?state=open&base=main", tok):
         n, head, base = p["number"], p["head"]["sha"], p["base"]["sha"]
-        d = {"pr": n, "head": head}
+        d = {"pr": n, "head": head, "head_ref": p["head"]["ref"], "base_ref": p["base"]["ref"], "main_board": main_board}
         listed.append({"pr": n, "head": head})
         if not state.get("paused"):
             try:
@@ -155,6 +156,17 @@ def fetch(policy_dir, ind, fetchd):
                "policy_sha": policy_sha, "main_sha": main_sha, "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
                "at": int(time.time()), "prs": listed}, open(os.path.join(fetchd, "fetch.json"), "w"))
     print(f"fetch: {len(listed)} 个 PR，gen={state['generation']}，paused={bool(state.get('paused'))}，pending={pending or '无'}")
+
+
+def board_at(ref, tok):
+    """业务仓库某提交上的 board.json（解析后的 JSON）；不存在返回 None，解析失败返回 {"error": ...}。不打印内容。"""
+    t = api("GET", f"repos/{BIZ}/contents/board.json?ref={ref}", tok, raw=True, ok404=True)
+    if t is None:
+        return None
+    try:
+        return json.loads(t)
+    except ValueError:
+        return {"error": "board.json 不是合法 JSON"}
 
 
 def pr_meta(n, p, tok):
@@ -206,7 +218,11 @@ def pr_data(n, head, base, tok, cfg):
                 except ValueError as e:
                     v = {"error": str(e)}
                 yamls[path] = v
-    return {"merge_base": mb, "files": files, "reviews": reviews, "check_runs": runs, "check_names": names, "head_paths": head_paths,
+    board_change = None
+    if any("board.json" in (f["filename"], f.get("previous_filename")) for f in files):
+        b, h = board_at(mb, tok), board_at(head, tok)
+        board_change = {"error": "解析失败"} if any(isinstance(x, dict) and set(x) == {"error"} for x in (b, h)) else {"base": b, "head": h}
+    return {"merge_base": mb, "files": files, "board_change": board_change, "reviews": reviews, "check_runs": runs, "check_names": names, "head_paths": head_paths,
             "ci_jobs": ci_jobs, "proposal_yaml": yamls}
 
 

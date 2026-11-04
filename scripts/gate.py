@@ -349,6 +349,22 @@ def realname(pr):
     return hits
 
 
+ME = ("Yarrow", "318895665+Yarrow-he@users.noreply.github.com")
+GH_WEB = ("GitHub", "noreply@github.com")   # 网页上 Update branch / merge 生成的提交，提交人是 GitHub
+
+
+def author_check(pr):
+    """每个提交的作者和提交人都得是 Yarrow 加 noreply；网页生成的提交只放行提交人。只报序号和字段。"""
+    hits = []
+    for i, c in enumerate((pr.get("meta") or {}).get("commits") or [], 1):
+        n = list(c.get("names") or []) + [None] * 4
+        if tuple(n[0:2]) != ME:
+            hits.append(f"第 {i} 个提交的作者")
+        if tuple(n[2:4]) not in (ME, GH_WEB):
+            hits.append(f"第 {i} 个提交的提交人")
+    return hits
+
+
 def evaluate(pr, cfg, glob):
     """算一个 PR 的四个门禁检查。返回 checks 列表。"""
     out = []
@@ -377,6 +393,9 @@ def evaluate(pr, cfg, glob):
     rn = realname(pr)
     if rn:
         fails.append("真名：不能出现用户真名或个人邮箱，一律写 Yarrow，邮箱用 GitHub noreply。位置：" + "；".join(rn))
+    au = author_check(pr)
+    if au:
+        fails.append("作者：作者和提交人都要写 Yarrow 和 noreply 邮箱。不对的：" + "；".join(au))
     for o in out:
         if o["conclusion"] != "success":
             fails.append(f"{o['name']}: {o['conclusion']}")

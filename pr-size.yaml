@@ -25,7 +25,11 @@ exclude_paths:
   # 策略提案里的纯配置（YAML）；提案里的脚本照常计数
   - "policy-proposals/*.yaml"
 # 首次脚手架临时排除：合并后移出，每次增删要 Yarrow 批准。
-scaffold_temp: []
+scaffold_temp:
+  # 首次搭建临时排除（PR #54 引导文件），引导完成后删掉。
+  - "policy-proposals/scripts/gate.py"
+  - "policy-proposals/scripts/test_gate.py"
+  - ".github/workflows/policy-selftest.yml"
 # 日志函数名单：只含一条独立日志调用、参数里无函数调用或赋值的行不计。
 log_functions:
   python: ["logger.debug", "logger.info", "logger.warning", "logger.error", "logging.info", "logging.debug", "logging.warning", "logging.error"]

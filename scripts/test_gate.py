@@ -28,7 +28,7 @@ def f(name, patch, **kw):
 def pr(files, **kw):
     d = {"pr": 7, "head": HEAD, "files": files, "reviews": [],
          "check_runs": [{"id": 1, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "success", "suite": 9}],
-         "meta": {"title": "t", "body": "", "commits": [{"message": "m", "names": ["osaka-work", "x@users.noreply.github.com"]}]},
+         "meta": {"title": "t", "body": "", "commits": [{"message": "m", "names": list(gate.ME) * 2}]},
          "head_paths": ["tests/a.sh"], "ci_jobs": {"jobs": {"python": {"steps": [{"run": "bash tests/a.sh"}]}}}, "proposal_yaml": {}}
     d.update(kw)
     return d
@@ -153,7 +153,7 @@ class Summary(unittest.TestCase):
             c = self.ev(pr([f("src/a.py", "@@\n+# by " + v + "\n")]))["gate-summary"]
             self.assertEqual(c["conclusion"], "failure", v)
             self.assertNotIn(v, c["summary"])
-        meta = lambda **k: dict({"title": "t", "body": "", "commits": [{"message": "m", "names": ["a", "b"]}]}, **k)
+        meta = lambda **k: dict({"title": "t", "body": "", "commits": [{"message": "m", "names": list(gate.ME) * 2}]}, **k)
         for m in (meta(title="x " + nm), meta(body=nm.lower()),
                   meta(commits=[{"message": "fix per " + nm, "names": ["a", "b"]}]),
                   meta(commits=[{"message": "m", "names": ["Yarrow-he", em.upper()]}]),
@@ -169,6 +169,19 @@ class Summary(unittest.TestCase):
         self.assertEqual(self.ev(pr([], meta=meta(body="Yarrow shang" + "hao" + "yinx yarrow@x.com")))["gate-summary"]["conclusion"], "success")
         p = pr([]); del p["meta"]
         self.assertEqual(self.ev(p)["gate-summary"]["conclusion"], "failure")
+
+    def test_author(self):
+        me, web = list(gate.ME), ["GitHub", "noreply@github.com"]
+        meta = lambda *cs: {"title": "t", "body": "", "commits": [{"message": "m", "names": n} for n in cs]}
+        self.assertEqual(self.ev(pr([], meta=meta(me * 2, me + web)))["gate-summary"]["conclusion"], "success")
+        for bad, where in ((["osaka-work[bot]", "x@users.noreply.github.com"] + me, "第 1 个提交的作者"),
+                           (me + ["osaka-gate[bot]", "y@users.noreply.github.com"], "第 1 个提交的提交人"),
+                           (web + web, "第 1 个提交的作者"), (["Yarrow", "a@b.c"] + me, "第 1 个提交的作者"), (me, "第 1 个提交的提交人")):
+            c = self.ev(pr([], meta=meta(bad)))["gate-summary"]
+            self.assertEqual(c["conclusion"], "failure", bad)
+            self.assertIn(where, c["summary"])
+        c = self.ev(pr([], meta=meta(me * 2, me + ["osaka-gate[bot]", "z"])))["gate-summary"]
+        self.assertIn("第 2 个提交的提交人", c["summary"])
 
     def test_paused_and_pending_and_incomplete(self):
         self.assertEqual(self.ev(pr([]), paused={"by": "bootstrap"})["gate-summary"]["conclusion"], "failure")

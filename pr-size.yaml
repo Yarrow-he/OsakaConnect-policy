@@ -1,0 +1,41 @@
+# pr-size 配置。阈值、日志函数名单、排除路径名单都是 Hao Yin 档④。按 PR 的 base 版本加载。
+threshold: 200
+# 重命名按 blob 相似度识别，只数改动行；二进制文件每个按 1 行计，并在输出里单列给审阅看。
+# 检查器脚本照常计数：大改要拆成多个提案，中间版本必须向后兼容（新文件先不被引用，最后一个提案再接上）。
+# 排除路径名单（glob）。名单外一律计入；不看内容、标签或 PR 说明。
+exclude_paths:
+  # 测试代码和测试数据（组长第 10 条）
+  - "tests/**"
+  - "android/**/src/test/**"
+  - "android/**/src/androidTest/**"
+  - "shared/test-vectors/**"
+  # 记账文件
+  - "board.json"
+  - "notes/**"
+  - "memory/**"
+  - "reports/**"
+  - "decisions/**"
+  # 文档类
+  - "README.md"
+  - "**/*.md"
+  - "docs/**"
+  - "LICENSE"
+  # 锁文件和生成文件
+  - "**/packages.lock.json"
+  # 策略提案里的纯配置（YAML）；提案里的脚本照常计数
+  - "policy-proposals/*.yaml"
+# 首次脚手架临时排除：合并后移出，每次增删要 Hao Yin 批准。
+scaffold_temp: []
+# 日志函数名单：只含一条独立日志调用、参数里无函数调用或赋值的行不计。
+log_functions:
+  python: ["logger.debug", "logger.info", "logger.warning", "logger.error", "logging.info", "logging.debug", "logging.warning", "logging.error"]
+  kotlin: ["Log.d", "Log.i", "Log.w", "Log.e", "Log.v"]
+  csharp: ["_logger.LogDebug", "_logger.LogInformation", "_logger.LogWarning", "_logger.LogError"]
+comment_syntax:
+  python: {line: ["#"], docstring_only: true}   # 三引号只在 docstring 位置（模块、类、函数第一条语句）算注释，其他位置是字符串，照常计数
+  kotlin: {line: ["//"], block: [["/*", "*/"]]}
+  csharp: {line: ["//", "///"], block: [["/*", "*/"]]}
+  kts:    {line: ["//"], block: [["/*", "*/"]]}
+  yaml:   {line: ["#"]}
+  shell:  {line: ["#"]}
+  powershell: {line: ["#"], block: [["<#", "#>"]]}

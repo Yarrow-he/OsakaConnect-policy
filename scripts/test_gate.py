@@ -1,0 +1,194 @@
+"""gate.py 的固定样例测试（只用标准库）。policy-selftest 和本地都跑：python3 -m unittest -v test_gate"""
+import copy, json, os, tempfile, unittest
+import gate
+
+PS = {"threshold": 200, "exclude_paths": ["tests/**", "**/*.md", "policy-proposals/*.yaml"], "scaffold_temp": [],
+      "log_functions": {"python": ["logger.info"], "kotlin": ["Log.d"]},
+      "comment_syntax": {"python": {"line": ["#"], "docstring_only": True}, "kotlin": {"line": ["//"], "block": [["/*", "*/"]]}}}
+CI = {"hao_yin_classes": {
+    "1_secrets": {"paths": [], "diff_patterns": ["PRIVATE_KEY"]},
+    "2_permissions": {"paths": ["policy-repo:scripts/**", "policy-proposals/scripts/**", ".github/CODEOWNERS"],
+                      "diff_patterns": ["permissions\\s*:"]},
+    "3_key_acceptance_list": {"paths": ["policy-proposals/key-acceptance-tests.yaml"]},
+    "4_pr_size": {"paths": []}, "5_loosen_gate": {"rules": []}},
+    "proposal_paths": []}
+RC = {"repo": "Yarrow-he/OsakaConnect", "branch": "main", "strict": False,
+      "branch_protection": [{"context": "python", "expected_source": {"app_id": 15368}}],
+      "gate_verified": [{"context": "pr-size", "expected_source": {"app_id": 5592067}}]}
+KT = {"tests": [{"id": "t1", "entry": "tests/a.sh", "paths": ["tests/a.sh"], "job": "python"}]}
+CFG = {"pr_size": PS, "ci_class": CI, "required": RC, "key_tests": KT}
+HEAD = "h" * 40
+GLOB = {"generation": 3, "paused": None, "pending": "", "owner": "Yarrow-he"}
+
+
+def f(name, patch, **kw):
+    return dict({"filename": name, "status": "modified", "patch": patch}, **kw)
+
+
+def pr(files, **kw):
+    d = {"pr": 7, "head": HEAD, "files": files, "reviews": [],
+         "check_runs": [{"id": 1, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "success", "suite": 9}],
+         "head_paths": ["tests/a.sh"], "ci_jobs": {"jobs": {"python": {"steps": [{"run": "bash tests/a.sh"}]}}}, "proposal_yaml": {}}
+    d.update(kw)
+    return d
+
+
+def by_name(checks):
+    return {c["name"]: c for c in checks}
+
+
+class PrSize(unittest.TestCase):
+    def test_comments_blank_logs_not_counted(self):
+        p = "@@ -1,3 +1,8 @@\n x = 1\n+# comment\n+\n+logger.info(\"hi %s\", name)\n+logger.info(foo())\n+y = 2\n-z = 3\n"
+        self.assertEqual(gate.count_patch("a.py", p, PS), 3)   # foo() 调用、y=2、删 z=3
+
+    def test_kotlin_block_comment(self):
+        p = "@@ -5,2 +5,6 @@\n fun a() {\n+/* start\n+ still comment\n+ end */\n+val b = 1\n+Log.d(TAG, \"x\")\n }\n"
+        self.assertEqual(gate.count_patch("A.kt", p, PS), 1)
+
+    def test_docstring_only_at_docstring_position(self):
+        p = '@@ -10,2 +10,6 @@\n def f():\n+    """doc\n+    more"""\n+    s = """not doc\n+    still string"""\n'
+        self.assertEqual(gate.count_patch("a.py", p, PS), 2)
+
+    def test_threshold_excludes_binary_and_unknown_patch(self):
+        files = [f("src/a.py", "@@ -1 +1,201 @@\n" + "".join(f"+v{i} = {i}\n" for i in range(201))),
+                 f("tests/x.py", "@@ -1 +1 @@\n+a=1\n"), f("README.md", "@@ -1 +1 @@\n+a\n")]
+        self.assertEqual(gate.pr_size(files, PS)[0], "failure")
+        files = [f("img.png", None, binary=True), f("big.cs", None, additions=150, deletions=49)]
+        c, s = gate.pr_size(files, PS)
+        self.assertEqual(c, "success"); self.assertIn("计入 200 行", s)
+
+    def test_rename_out_of_excluded_counts(self):
+        files = [f("src/b.py", "@@ -1 +1 @@\n-a = 1\n+a = 2\n", status="renamed", previous_filename="tests/b.py")]
+        self.assertIn("计入 2 行", gate.pr_size(files, PS)[1])
+
+
+class ApprovalClass(unittest.TestCase):
+    def cls(self, files, yamls=None):
+        return gate.approval_class(files, yamls or {}, CI, PS)
+
+    def test_regular(self):
+        self.assertEqual(self.cls([f("src/a.py", "@@\n+x=1\n")])[:2], ("success", "regular"))
+
+    def test_scripts_path_and_secret_pattern(self):
+        self.assertEqual(self.cls([f("policy-proposals/scripts/gate.py", "@@\n+x\n")])[1], "haoyin")
+        self.assertEqual(self.cls([f("src/a.py", "@@\n+k = PRIVATE_KEY\n")])[1], "haoyin")
+
+    def test_permission_pattern_only_in_github_dir(self):
+        self.assertEqual(self.cls([f("src/a.py", "@@\n+permissions: x\n")])[1], "regular")
+        self.assertEqual(self.cls([f(".github/workflows/ci.yml", "@@\n+permissions: write-all\n")])[1], "haoyin")
+
+    def test_bad_proposal_path_fails(self):
+        self.assertEqual(self.cls([f("policy-proposals/.github/workflows/x.yml", "@@\n+x\n")])[0], "failure")
+        self.assertEqual(self.cls([f("policy-proposals/other.txt", "@@\n+x\n")])[0], "failure")
+
+    def test_required_checks_remove_is_class5_add_is_regular(self):
+        p = "policy-proposals/required-checks.yaml"
+        ff = [f(p, "@@\n+x\n")]
+        more = copy.deepcopy(RC); more["branch_protection"].append({"context": "lint", "expected_source": {"app_id": 15368}})
+        self.assertEqual(gate.approval_class(ff, {p: {"base": RC, "head": more}}, CI, PS, {"lint"})[1], "regular")
+        self.assertEqual(self.cls(ff, {p: {"base": RC, "head": more}})[0], "failure")    # 新业务检查在 head 上没出现过
+        self.assertEqual(gate.approval_class(ff, {p: {"base": more, "head": RC}}, CI, PS, {"lint"})[1], "haoyin")
+        bad = copy.deepcopy(RC); bad["gate_verified"].append({"context": "new-gate", "expected_source": {"app_id": 5592067}})
+        self.assertEqual(self.cls(ff, {p: {"base": RC, "head": bad}})[0], "failure")     # 闸口不写这个检查
+        bad = copy.deepcopy(RC); bad["gate_verified"].append({"context": "x", "expected_source": {"app_id": "15368"}})
+        self.assertEqual(self.cls(ff, {p: {"base": RC, "head": bad}})[0], "failure")     # app_id 不是整数
+        moved = copy.deepcopy(RC); moved["gate_verified"].append(moved["branch_protection"].pop())
+        self.assertEqual(gate.approval_class(ff, {p: {"base": RC, "head": moved}}, CI, PS, {"python"})[1], "haoyin")
+
+    def test_pr_size_keys_and_comment_syntax(self):
+        p = "policy-proposals/pr-size.yaml"
+        ff = [f(p, "@@\n+x\n")]
+        h = copy.deepcopy(PS); h["threshold"] = 300
+        self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[1], "haoyin")
+        h = copy.deepcopy(PS); h["comment_syntax"]["python"]["line"] = ["#", "x"]
+        self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[0], "failure")
+        h = copy.deepcopy(PS); h["comment_syntax"]["python"]["docstring_only"] = False
+        self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[0], "failure")
+        h = copy.deepcopy(PS); h["bogus"] = 1
+        self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[0], "failure")
+
+    def test_key_tests_schema(self):
+        p = "policy-proposals/key-acceptance-tests.yaml"
+        ff = [f(p, "@@\n+x\n")]
+        self.assertEqual(self.cls(ff, {p: {"base": KT, "head": {"tests": [{"id": "t1", "paths": []}]}}})[0], "failure")
+        self.assertEqual(self.cls(ff, {p: {"base": KT, "head": {"tests": []}}})[0], "failure")
+
+    def test_parse_error_fails(self):
+        p = "policy-proposals/pr-size.yaml"
+        self.assertEqual(self.cls([f(p, "@@\n+x\n")], {p: {"error": "bad"}})[0], "failure")
+
+
+class Owner(unittest.TestCase):
+    def test_rules(self):
+        R = lambda s, c=HEAD, u="Yarrow-he": {"user": u, "state": s, "commit_id": c}
+        self.assertEqual(gate.owner_approval("regular", [], HEAD, "Yarrow-he")[0], "success")
+        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED")], HEAD, "Yarrow-he")[0], "success")
+        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED"), R("COMMENTED")], HEAD, "Yarrow-he")[0], "success")
+        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED", "old")], HEAD, "Yarrow-he")[0], "failure")
+        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED"), R("DISMISSED")], HEAD, "Yarrow-he")[0], "failure")
+        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED", u="bot")], HEAD, "Yarrow-he")[0], "failure")
+        self.assertEqual(gate.owner_approval("error", [R("APPROVED")], HEAD, "Yarrow-he")[0], "failure")
+
+
+class Summary(unittest.TestCase):
+    def ev(self, p, **g):
+        return by_name(gate.evaluate(p, CFG, dict(GLOB, **g)))
+
+    def test_all_green(self):
+        c = self.ev(pr([f("src/a.py", "@@\n+x = 1\n")]))
+        self.assertEqual(c["gate-summary"]["conclusion"], "success")
+        self.assertIn("gen=3", c["gate-summary"]["summary"])
+
+    def test_paused_and_pending_and_incomplete(self):
+        self.assertEqual(self.ev(pr([]), paused={"by": "bootstrap"})["gate-summary"]["conclusion"], "failure")
+        self.assertEqual(self.ev(pr([]), pending="x")["gate-summary"]["conclusion"], "failure")
+        c = self.ev(pr([], incomplete="300 files"))
+        self.assertTrue(all(x["conclusion"] == "failure" for x in c.values()))
+
+    def test_business_check_pending_failure_and_fake_suite(self):
+        runs = [{"id": 1, "name": "python", "app_id": 15368, "status": "in_progress", "conclusion": None, "suite": 9}]
+        self.assertIsNone(self.ev(pr([], check_runs=runs))["gate-summary"]["conclusion"])
+        self.assertIsNone(self.ev(pr([], check_runs=[]))["gate-summary"]["conclusion"])
+        runs = [{"id": 1, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "failure", "suite": 9},
+                {"id": 2, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "success", "suite": 10}]
+        self.assertEqual(self.ev(pr([], check_runs=runs))["gate-summary"]["conclusion"], "failure")
+        runs = [{"id": 1, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "failure", "suite": 9},
+                {"id": 3, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "success", "suite": 9}]
+        self.assertEqual(self.ev(pr([], check_runs=runs))["gate-summary"]["conclusion"], "success")   # 同 suite 重跑取最新
+        runs = [{"id": 1, "name": "python", "app_id": 99, "status": "completed", "conclusion": "success", "suite": 9}]
+        self.assertIsNone(self.ev(pr([], check_runs=runs))["gate-summary"]["conclusion"])               # 别的来源不认
+
+    def test_haoyin_needs_approval_and_selftest(self):
+        files = [f("policy-proposals/scripts/gate.py", "@@\n+x = 1\n")]
+        c = self.ev(pr(files))
+        self.assertEqual(c["owner-approval"]["conclusion"], "failure")
+        self.assertEqual(c["gate-summary"]["conclusion"], "failure")
+        rv = [{"user": "Yarrow-he", "state": "APPROVED", "commit_id": HEAD}]
+        self.assertIsNone(self.ev(pr(files, reviews=rv))["gate-summary"]["conclusion"])   # 等 policy-selftest
+        runs = pr([])["check_runs"] + [{"id": 5, "name": "policy-selftest", "app_id": 15368, "status": "completed",
+                                        "conclusion": "success", "suite": 11}]
+        self.assertEqual(self.ev(pr(files, reviews=rv, check_runs=runs))["gate-summary"]["conclusion"], "success")
+
+    def test_key_tests(self):
+        self.assertEqual(self.ev(pr([], head_paths=[]))["gate-summary"]["conclusion"], "failure")
+        self.assertEqual(self.ev(pr([], ci_jobs={"jobs": {"python": {}}}))["gate-summary"]["conclusion"], "failure")
+        cfg = dict(CFG, key_tests={"tests": []})
+        self.assertEqual(by_name(gate.evaluate(pr([]), cfg, GLOB))["gate-summary"]["conclusion"], "failure")
+
+    def test_size_failure_blocks_summary(self):
+        big = f("src/a.py", "@@ -1 +1,201 @@\n" + "".join(f"+v{i} = {i}\n" for i in range(201)))
+        self.assertEqual(self.ev(pr([big]))["gate-summary"]["conclusion"], "failure")
+
+    def test_main_end_to_end(self):
+        d = tempfile.mkdtemp()
+        os.makedirs(f"{d}/in/prs")
+        json.dump(CFG, open(f"{d}/in/config.json", "w")); json.dump(GLOB, open(f"{d}/in/global.json", "w"))
+        json.dump(pr([f("src/a.py", "@@\n+x = 1\n")]), open(f"{d}/in/prs/7.json", "w"))
+        gate.main(f"{d}/in", f"{d}/out")
+        o = json.load(open(f"{d}/out/7.json"))
+        self.assertEqual((o["pr"], o["head"], len(o["checks"])), (7, HEAD, 4))
+
+
+if __name__ == "__main__":
+    unittest.main()

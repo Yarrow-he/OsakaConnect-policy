@@ -1,0 +1,16 @@
+# 关键验收测试清单（Hao Yin 2026-11-03 定：现有 8 组全部列入）。
+# 改动本清单 = Hao Yin 档③。清单里列出的测试文件本身不算第③类。
+# 检查器核对：paths 里每个文件在 head 上存在；entry 在 ci.yml 对应 job 里被引用（其他文件经 csproj、gradle、脚本间接调用，不要求出现在 ci.yml）。
+# 这只能证明"还在、还被调用"，证明不了断言没被削弱；削弱测试靠审阅和负向样例。
+# job 改名分两步：先提案给清单加新 job 名（两个都接受），ci.yml 改名合并后，再提案删旧名。
+# 路径和 job 名取自 OsakaConnect main（6133be40）的 tests/ 和 .github/workflows/ci.yml。
+# 检查器读到空清单或文件缺失报 failure，不报 success、neutral、skipped。
+tests:
+  - {id: win-shell-smoke,       entry: tests/windows/win-shell/smoke.ps1, paths: [tests/windows/win-shell/smoke.ps1],                                job: windows-acceptance, covers: [A1, A2, A14, A16, A17]}
+  - {id: win-diagnostics,       entry: tests/windows/win-diagnostics/WinDiagnostics.Tests.csproj, paths: [tests/windows/win-diagnostics/WinDiagnostics.Tests.csproj, tests/windows/win-diagnostics/ErrorPresenterTests.cs, tests/windows/win-diagnostics/InviteCodeTests.cs, tests/windows/win-diagnostics/LogRedactorTests.cs, tests/windows/win-diagnostics/ProductSurface.cs, tests/windows/win-diagnostics/SharedVectors.cs], job: windows-acceptance, covers: [A3, A4, A15]}
+  - {id: android-shell-nav,     entry: tests/android/android-shell/ci-run.sh, paths: [tests/android/android-shell/androidTest/ShellNavigationTest.kt, tests/android/android-shell/ci-run.sh], job: android-emulator, covers: [A5, A6]}
+  - {id: android-diagnostics,   entry: tests/android/android-diagnostics, paths: [tests/android/android-diagnostics/DiagnosticsVectorsTest.kt, tests/android/android-diagnostics/JvmJsonDivergenceTest.kt, tests/android/android-diagnostics/run.sh, tests/android/android-diagnostics/run-instrumented.sh], job: android-emulator, covers: [A7, A15]}
+  - {id: server-core,           entry: tests/server/server-core, paths: [tests/server/server-core/test_server_core.py],                     job: python, covers: [A8, A9, A15, A17]}
+  - {id: contract,              entry: tests/contract, paths: [tests/contract/test_contract.py],                                  job: contract, covers: [A9]}
+  - {id: admin-connect-a10,     entry: tests/admin/admin-connect/run-a10.sh, paths: [tests/admin/admin-connect/run-a10.sh, tests/admin/admin-connect/docker-compose.yml, tests/admin/admin-connect/gen-certs.sh], job: a10-docker, covers: [A10]}
+  - {id: guards-acceptance,     entry: tests/admin/admin-connect/grep-guard.sh, paths: [tests/admin/admin-connect/grep-guard.sh, tests/android/android-shell/lang-guard.sh], job: guards-acceptance, covers: [A10, A14, A17]}

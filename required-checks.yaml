@@ -1,0 +1,30 @@
+# 必过检查清单：唯一名单。业务检查读取自 main 分支保护（2026-11-03 19:05 AEST，线上是带 app_id 的 checks 格式）。
+# 分两层：
+#   branch_protection：同步进 GitHub 分支保护的检查（稳定，很少变）。
+#   gate_verified：不进分支保护，由 gate-summary 逐项核对（来源、head、结论 success）。增删它们不用改分支保护。
+# 加检查（任一层）：常规档。删检查、把来源改宽、strict 由 true 改 false：Hao Yin 档第⑤类。
+# 15368 = GitHub Actions；5592067 = 闸口 App osaka-gate；5594597 = 组长 App osaka-lead。
+repo: Yarrow-he/OsakaConnect
+branch: main
+strict: false
+branch_protection:
+  - {context: contract,           expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: python,             expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: android,            expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: windows-dotnet,     expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: guards,             expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: android-emulator,   expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: windows-acceptance, expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: a10-docker,         expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  - {context: guards-acceptance,  expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
+  # 上线清单第 9 步前保持注释，按清单取消注释、走一次提案发布同步：
+  # - {context: gate-summary,        expected_source: {app_id: 5592067}}
+  # - {context: lead-merge-approved, expected_source: {app_id: 5594597}}
+gate_verified:
+  - {context: pr-size,           expected_source: {app_id: 5592067}}
+  - {context: ci-approval-class, expected_source: {app_id: 5592067}}
+  - {context: owner-approval,    expected_source: {app_id: 5592067}}
+# 往 gate_verified 加一个由闸口 App 写的新检查：先改 policy-checks.yml 的写回名单（权限类），再提案加进清单；
+#   发布时核对清单里每个 5592067 来源的检查都在写回名单里，不在就 failed，防止加了检查没人写、全仓卡死。
+# lead-merge-approved 不在 gate_verified：它和 gate-summary 是分支保护里并列的两道门（先 gate-summary 绿，组长再批），gate-summary 不等它，否则互等死锁（第 12 轮 A）。
+# policy-published 不在这里：它写在合并后的提交上；"有已合并未发布的提案就不许合并别的 PR"由 gate-summary 自动拦。

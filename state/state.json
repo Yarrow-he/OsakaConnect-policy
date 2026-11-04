@@ -1,0 +1,10 @@
+{
+ "active": null,
+ "divergence": [],
+ "generation": 1,
+ "history": [],
+ "paused": {"by": "bootstrap"},
+ "processed_through": null,
+ "proposals": {},
+ "schema": 1
+}

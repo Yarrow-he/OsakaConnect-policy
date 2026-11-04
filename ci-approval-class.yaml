@@ -1,0 +1,53 @@
+# ci-approval-class 分档规则。按 base 版本加载；业务仓库和策略仓库的 PR 都跑。
+# 路径默认指 OsakaConnect；"policy-repo:" 前缀指策略仓库（目前策略仓库没有 PR 流程，这些条目给将来用）。
+# 直接拒绝（检查 failure，PR 不能合并）：policy-proposals/.github/**，以及 policy-proposals/ 下白名单以外的路径。
+#   策略仓库的 workflow 不走提案，见 README。
+# 命中任一条 => Hao Yin 档；都不命中 => 常规档。解析失败或遇到动态结构 => 报红，不默认常规档。
+# 放宽本文件（让 Hao Yin 档变少）属于第⑤类。
+# required-checks.yaml 按 (层级, context, source) 比较：检查从 branch_protection 层移到 gate_verified 层也算删除必过检查（第⑤类）。
+hao_yin_classes:
+  "1_secrets":
+    paths: []
+    diff_patterns: ['secrets\s*[.\[]', 'toJSON\s*\(\s*secrets', 'secrets:\s*inherit', 'OSAKA_[A-Z_]*KEY', 'PRIVATE_KEY']
+  "2_permissions":
+    paths:
+      - "policy-repo:.github/workflows/**"       # 前缀 policy-repo: 表示策略仓库内的路径；业务仓库 workflow 按下面的关键字判
+      - "policy-repo:scripts/**"                 # 策略仓库里的检查器脚本
+      - ".github/workflows/policy-selftest.yml"  # 业务仓库里跑候选检查器的自测 workflow
+      - "policy-proposals/scripts/**"            # 所有检查器脚本（含依赖）：改它就能让检查恒过，一律算权限类
+      - ".github/CODEOWNERS"
+    diff_patterns:
+      - '["'']?permissions["'']?\s*:'
+      - 'GITHUB_TOKEN'
+      - 'github\.token'
+      - 'uses:\s*[^./][^@]*/\.github/workflows/'
+      - 'pull_request_target|workflow_run|issue_comment'   # 能拿到写令牌或 secrets 的触发器
+      - 'create-github-app-token'
+      - 'app[-_]id'
+      - 'installation[-_]id'
+    note: "scripts/ci/ 脚本读 token 不算，由审阅审查"
+  "3_key_acceptance_list":
+    paths: ["key-acceptance-tests.yaml", "policy-proposals/key-acceptance-tests.yaml"]
+  "4_pr_size":
+    paths: []
+    yaml_keys:   # 只看这几个键变没变，pr-size.yaml 其他键不算
+      - {file: "pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
+      - {file: "policy-proposals/pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
+  "5_loosen_gate":
+    rules:
+      - "required-checks.yaml 删除条目或 expected_source 变宽（含 policy-proposals/ 下同名文件）"
+      - "ci-approval-class.yaml 删除或放宽任一规则（含 policy-proposals/ 下同名文件）"
+      - "required-checks.yaml 的 strict 由 true 改 false，或改动 repo、branch 字段"
+    needs_plain_explanation: true
+# comment_syntax 改动是常规档（Hao Yin 已定），但每种语言只能从检查器内置的候选分隔符里选，选了候选外的 => failure，
+#   防止把运行代码改判成注释。
+# 未知键、重复键、类型错误：策略仓库任一 YAML 出现脚本不认识的键 => 报红（不默认常规档）。
+# 不在上面的都是常规档：加必过检查、收紧分档、删或放宽非必过检查、新增第三方 action、workflow 对外联网、A/B 意见不一致。
+# 提案路径白名单：PR 检查用这一份；发布（policy-publish）不读它，用 workflow 里写死的同一份映射，
+# 所以改这里扩大不了发布范围。两边不一致时以 workflow 为准，gate-summary 报红。
+proposal_paths:
+  - "policy-proposals/required-checks.yaml"
+  - "policy-proposals/key-acceptance-tests.yaml"
+  - "policy-proposals/pr-size.yaml"
+  - "policy-proposals/ci-approval-class.yaml"
+  - "policy-proposals/scripts/**"

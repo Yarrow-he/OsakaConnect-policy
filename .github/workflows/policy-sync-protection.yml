@@ -1,4 +1,4 @@
-# 把策略仓库 main 上 required-checks.yaml 的 branch_protection 层同步到 OsakaConnect main 的分支保护。权限类（Hao Yin 档②）。
+# 把策略仓库 main 上 required-checks.yaml 的 branch_protection 层同步到 OsakaConnect main 的分支保护。权限类（Yarrow 档②）。
 # 只被 policy-publish、policy-rollback 调用（在它们的 policy-write 组里）。gate-summary、lead-merge-approved 已在线上时永不删除。
 # 注意：administration 写权限能改全部分支保护，"只改必过检查"是 gatelib.py 的约束，不是令牌边界。
 name: policy-sync-protection

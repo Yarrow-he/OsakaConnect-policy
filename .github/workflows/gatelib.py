@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """闸口 workflow 的内联逻辑（取数据、写结果、发布、回滚、作废、引导、同步分支保护）。
-放在 .github/workflows/ 下，和 workflow 一样只能由 Hao Yin 临时管理员放行推送；不读、不跑任何 PR 代码。
+放在 .github/workflows/ 下，和 workflow 一样只能由 Yarrow 临时管理员放行推送；不读、不跑任何 PR 代码。
 令牌只从环境变量读，不打印。用法见各 workflow。
 """
 import base64, json, os, re, subprocess, sys, tempfile, time, urllib.error, urllib.request
@@ -21,7 +21,7 @@ class Retry(Exception):
 
 
 class Reject(Exception):
-    """内容、授权、基线核对失败：要 Hao Yin 处理（作废或回滚）。"""
+    """内容、授权、基线核对失败：要 Yarrow 处理（作废或回滚）。"""
 
 
 def api(method, path, tok, body=None, raw=False, ok404=False):
@@ -144,6 +144,7 @@ def fetch(policy_dir, ind, fetchd):
         if not state.get("paused"):
             try:
                 d.update(pr_data(n, head, base, tok, cfg))
+                d["meta"] = pr_meta(n, p, tok)
             except Exception as e:  # 一个 PR 取不全只让它自己失败
                 d["incomplete"] = f"{type(e).__name__}: {str(e)[:200]}"
         json.dump(d, open(os.path.join(ind, "prs", f"{n}.json"), "w"))
@@ -154,6 +155,14 @@ def fetch(policy_dir, ind, fetchd):
                "policy_sha": policy_sha, "main_sha": main_sha, "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
                "at": int(time.time()), "prs": listed}, open(os.path.join(fetchd, "fetch.json"), "w"))
     print(f"fetch: {len(listed)} 个 PR，gen={state['generation']}，paused={bool(state.get('paused'))}，pending={pending or '无'}")
+
+
+def pr_meta(n, p, tok):
+    """真名检查用：PR 标题正文和 PR 内各提交的提交信息、作者/提交者。"""
+    cs = [{"message": c["commit"]["message"], "names": [c["commit"]["author"]["name"], c["commit"]["author"]["email"],
+                                                         c["commit"]["committer"]["name"], c["commit"]["committer"]["email"]]}
+          for c in pages(f"repos/{BIZ}/pulls/{n}/commits", tok, limit=3)]
+    return {"title": p.get("title") or "", "body": p.get("body") or "", "commits": cs}
 
 
 def pr_data(n, head, base, tok, cfg):
@@ -470,7 +479,7 @@ def sync(policy_dir, dry):
     have = {(c["context"], c.get("app_id")) for c in online["checks"]}
     want = {(e["context"], e["expected_source"]["app_id"]) for e in rc.get("branch_protection") or []}
     named = {c for c, _ in want}
-    want |= {x for x in have if x[0] in NEVER_REMOVE and x[0] not in named}   # 这两项只能 Hao Yin 手动删
+    want |= {x for x in have if x[0] in NEVER_REMOVE and x[0] not in named}   # 这两项只能 Yarrow 手动删
     if have == want and online["strict"] == rc["strict"]:
         print(f"分支保护一致（{len(have)} 项，strict={online['strict']}）"); return
     print(f"分支保护不一致：多 {sorted(have - want)}，少 {sorted(want - have)}，strict {online['strict']}->{rc['strict']}")

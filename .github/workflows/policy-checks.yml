@@ -1,4 +1,4 @@
-# 给 OsakaConnect 的 open PR 算 pr-size、ci-approval-class、owner-approval、gate-summary 并写回。权限类（Hao Yin 档②）。
+# 给 OsakaConnect 的 open PR 算 pr-size、ci-approval-class、owner-approval、gate-summary 并写回。权限类（Yarrow 档②）。
 # 三个 job：fetch 只读取数据；compute 跑检查器（没有任何令牌和 secrets）；write 只写 check run（不跑检查器）。
 # 任何 job 都不检出、不执行 OsakaConnect PR 的代码，PR 内容只经 API 读。逻辑在 gatelib.py（同目录，同样只能临时管理员放行推）。
 name: policy-checks

@@ -1,6 +1,6 @@
 # OsakaConnect-policy（草稿，未推送）
 
-Osaka 代码组的门禁策略仓库。私有，保持私有。main 受 ruleset `policy-main` 保护（禁更新、删除、强推），平时只有闸口 App（Integration 5592067）能绕过。`.github/workflows/` 的文件由 Hao Yin 临时给 Repository admin 开放行、用自己账号推，推完马上关（Hao Yin 2026-11-03 定）。工作 App 没装在这里。
+Osaka 代码组的门禁策略仓库。main 受 ruleset `policy-main` 保护（禁更新、删除、强推），平时只有闸口 App（Integration 5592067）能绕过。`.github/workflows/` 的文件由 Hao Yin 临时给 Repository admin 开放行、用自己账号推，推完马上关（Hao Yin 2026-11-03 定）。工作 App 没装在这里。
 
 ## 文件
 1. `required-checks.yaml`：main 的必过检查清单，唯一名单。

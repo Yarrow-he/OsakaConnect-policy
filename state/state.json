@@ -1,10 +1,20 @@
 {
- "active": null,
+ "active": {
+  "from_merge": "20083b9ed8b29b752f5e3d5ef20b10db600f5c2e",
+  "generation": 2,
+  "pr": null
+ },
  "divergence": [],
- "generation": 1,
- "history": [],
- "paused": {"by": "bootstrap"},
- "processed_through": null,
+ "generation": 2,
+ "history": [
+  {
+   "from_merge": "20083b9ed8b29b752f5e3d5ef20b10db600f5c2e",
+   "generation": 2,
+   "kind": "bootstrap"
+  }
+ ],
+ "paused": null,
+ "processed_through": "20083b9ed8b29b752f5e3d5ef20b10db600f5c2e",
  "proposals": {},
  "schema": 1
 }

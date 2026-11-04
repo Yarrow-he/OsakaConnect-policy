@@ -23,7 +23,7 @@ SCHEMA = {
     "pr-size.yaml": {"threshold", "exclude_paths", "scaffold_temp", "log_functions", "comment_syntax"},
     "required-checks.yaml": {"repo", "branch", "strict", "branch_protection", "gate_verified"},
     "key-acceptance-tests.yaml": {"tests"},
-    "ci-approval-class.yaml": {"yarrow_classes", "proposal_paths"},
+    "ci-approval-class.yaml": {"yarrow_classes", "proposal_paths", "scope"},
 }
 PROPOSAL_RE = re.compile(r"^policy-proposals/((required-checks|key-acceptance-tests|pr-size|ci-approval-class)\.yaml"
                          r"|scripts/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$")
@@ -176,6 +176,14 @@ def validate(name, d):
                     errs.append(f"{c}：组长 App 只写 lead-merge-approved")
         if not isinstance(d.get("strict"), bool):
             errs.append("strict 不是 true/false")
+    elif name == "ci-approval-class.yaml":
+        sc = d.get("scope")
+        if not isinstance(sc, dict) or not isinstance(sc.get("branch_kinds"), list) \
+                or not all(isinstance(k, dict) and isinstance(k.get("prefix"), str) and k["prefix"].endswith("/")
+                           and (k.get("paths") == "global" or isinstance(k.get("paths"), list)) for k in sc["branch_kinds"]):
+            errs.append("scope.branch_kinds 结构不对（每项要 prefix 以 / 结尾、paths 为列表或 global）")
+        if not ((d.get("yarrow_classes") or {}).get("6_protected_config") or {}).get("paths"):
+            errs.append("缺 6_protected_config.paths")
     elif name == "key-acceptance-tests.yaml":
         tests = d.get("tests")
         if not isinstance(tests, list) or not tests:
@@ -193,9 +201,92 @@ def validate(name, d):
     return errs
 
 
-def approval_class(files, yamls, ci_cfg, ps_cfg, known_checks=()):
+def in_prefixes(path, prefixes):
+    """board.json scope 的写法：以 / 结尾是目录前缀，否则是整文件。"""
+    return any(path == p or (p.endswith("/") and path.startswith(p)) for p in prefixes)
+
+
+def _shown(path):
+    return "（文件名含敏感内容，不显示）" if _bad(path) else path
+
+
+def board_perm(board, task_keys, module_keys):
+    """board.json 里和权限有关的部分：任务/进度类顶层键以外的全部，modules 只留 module_keys。"""
+    if not isinstance(board, dict):
+        return None
+    out = {k: v for k, v in board.items() if k not in task_keys and k != "modules"}
+    mods = board.get("modules")
+    out["modules"] = [{k: m.get(k) for k in module_keys} if isinstance(m, dict) else m for m in mods] \
+        if isinstance(mods, list) else mods
+    return out
+
+
+def scope_check(pr, ci_cfg):
+    """业务 PR 的改动范围检查（替代业务仓库的 check-scope.sh）。返回 (errors, reasons)。
+    范围只读业务仓库 main 上 board.json 的 scope/modules（fetch 取，PR 里的那份不生效）；
+    分支名只用来选范围，不给任何例外；受保护路径（第 6 类）进 Yarrow 档，不靠关键词；
+    删除、改名（新旧两个路径）照常检查；分支对不上模块也对不上 branch_kinds 就拦。只报规则和路径，不回显内容。"""
+    sc = ci_cfg.get("scope")
+    if not isinstance(sc, dict):
+        return ["scope 配置缺失"], []
+    errs, reasons = [], []
+    if pr.get("base_ref") != "main":
+        return [f"base 分支不是 main（{pr.get('base_ref')!r}）"], []
+    ref = pr.get("head_ref")
+    if not isinstance(ref, str) or not ref:
+        return ["读不到 PR 的 head 分支名"], []
+    mb = pr.get("main_board")
+    if not isinstance(mb, dict) or not isinstance(mb.get("scope"), dict) or not isinstance(mb.get("modules"), list):
+        return ["读不到业务仓库 main 上 board.json 的 scope/modules"], []
+    glob_ = mb["scope"].get("global") or []
+    strs = lambda x: isinstance(x, list) and all(isinstance(i, str) for i in x)
+    if not strs(glob_) or not all(isinstance(m, dict) and strs(m.get("paths") or []) for m in mb["modules"]):
+        return ["main 上 board.json 的 scope.global 或 modules[].paths 不是字符串列表"], []
+    if not all(strs(sc.get(k) or []) for k in ("module_extra", "board_task_keys", "board_module_keys")):
+        return ["ci-approval-class 的 scope 配置类型不对"], []
+    prot = (ci_cfg["yarrow_classes"].get("6_protected_config") or {}).get("paths") or []
+    if not prot:
+        return ["ci-approval-class 缺 6_protected_config"], []
+    mod, best = None, -1
+    for m in mb["modules"]:
+        b = m.get("branch") if isinstance(m, dict) else None
+        if isinstance(b, str) and b and (ref == b or ref.startswith(b + "-")) and len(b) > best:
+            mod, best = m, len(b)
+    if mod is not None:
+        allowed, label = list(mod.get("paths") or []) + list(sc.get("module_extra") or []), f"模块 {mod.get('id')}"
+    else:
+        kind = next((k for k in sc.get("branch_kinds") or [] if ref.startswith(k["prefix"])), None)
+        if kind is None:
+            return [f"分支 {ref} 对不上 main 上 board.json 的任何模块，也不属于 {[k['prefix'] for k in sc.get('branch_kinds') or []]}"], []
+        allowed = glob_ if kind["paths"] == "global" else kind["paths"]
+        label = f"{kind['prefix']} 类分支"
+    for f in pr.get("files") or []:
+        for p in [f["filename"]] + ([f["previous_filename"]] if f.get("previous_filename") else []):
+            if match_any(p, prot):
+                reasons.append(f"6_protected_config: {_shown(p)}")
+                continue
+            if PROPOSAL_RE.match(p):
+                continue        # 策略提案路径由提案白名单和第 2~5 类管，不走 board.json 范围
+            if not in_prefixes(p, glob_):
+                errs.append(f"scope: {_shown(p)} 不在 main 的 scope.global 里")
+            elif not in_prefixes(p, allowed):
+                errs.append(f"scope: {_shown(p)} 超出{label}的范围")
+    bc = pr.get("board_change")
+    if bc is not None:
+        if bc.get("error"):
+            errs.append("board.json 解析失败（内容不回显）")
+        else:
+            tk, mk = sc.get("board_task_keys") or [], sc.get("board_module_keys") or ["id", "branch", "paths"]
+            b, h = board_perm(bc.get("base"), tk, mk), board_perm(bc.get("head"), tk, mk)
+            if b != h:
+                keys = sorted(k for k in set(b or {}) | set(h or {}) if (b or {}).get(k) != (h or {}).get(k)) if b and h else ["整个文件"]
+                reasons.append(f"7_board_scope: board.json 权限相关字段变了：{', '.join(keys)}")
+    return errs, reasons
+
+
+def approval_class(files, yamls, ci_cfg, ps_cfg, known_checks=(), extra=((), ())):
     """返回 (conclusion, cls, reasons)。cls: yarrow|regular。yamls: {路径: {base, head, error}}（JSON 化后的提案 YAML）。"""
-    reasons, errors = [], []
+    errors, reasons = list(extra[0]), list(extra[1])
     classes = ci_cfg["yarrow_classes"]
     for f in files:
         names = [f["filename"]] + ([f["previous_filename"]] if f.get("previous_filename") else [])
@@ -382,7 +473,8 @@ def evaluate(pr, cfg, glob):
     out.append({"name": "pr-size", "conclusion": c, "title": "pr-size", "summary": s})
     try:
         known = {r["name"] for r in pr.get("check_runs") or [] if r["app_id"] == ACTIONS_APP} | set(pr.get("check_names") or [])
-        c2, cls, s2 = approval_class(files, pr.get("proposal_yaml") or {}, cfg["ci_class"], cfg["pr_size"], known)
+        extra = scope_check(pr, cfg["ci_class"])
+        c2, cls, s2 = approval_class(files, pr.get("proposal_yaml") or {}, cfg["ci_class"], cfg["pr_size"], known, extra)
     except Exception as e:
         c2, cls, s2 = "failure", "error", f"ci-approval-class 出错：{e!r}"
     out.append({"name": "ci-approval-class", "conclusion": c2, "title": f"class={cls}", "summary": s2})

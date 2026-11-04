@@ -11,7 +11,7 @@ yarrow_classes:
     diff_patterns: ['secrets\s*[.\[]', 'toJSON\s*\(\s*secrets', 'secrets:\s*inherit', 'OSAKA_[A-Z_]*KEY', 'PRIVATE_KEY']
   "2_permissions":
     paths:
-      - "policy-repo:.github/workflows/**"       # 前缀 policy-repo: 表示策略仓库内的路径；业务仓库 workflow 按下面的关键字判
+      - "policy-repo:.github/workflows/**"       # 前缀 policy-repo: 表示策略仓库内的路径；业务仓库 workflow 整目录见第 6 类
       - "policy-repo:scripts/**"                 # 策略仓库里的检查器脚本
       - ".github/workflows/policy-selftest.yml"  # 业务仓库里跑候选检查器的自测 workflow
       - "policy-proposals/scripts/**"            # 所有检查器脚本（含依赖）：改它就能让检查恒过，一律算权限类
@@ -33,6 +33,10 @@ yarrow_classes:
     yaml_keys:   # 只看这几个键变没变，pr-size.yaml 其他键不算
       - {file: "pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
       - {file: "policy-proposals/pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
+  "6_protected_config":   # 按路径一律进 Yarrow 档，不看关键词、不看分支名（没有 lead/setup-* 例外）；删除、改名也算
+    paths: [".codex/**", ".claude/**", ".github/workflows/**", "scripts/check-*.sh"]
+  "7_board_scope":        # board.json 的权限部分变了才进 Yarrow 档：scope、modules 的 board_module_keys、board_task_keys 以外的顶层键
+    paths: []
   "5_loosen_gate":
     rules:
       - "required-checks.yaml 删除条目或 expected_source 变宽（含 policy-proposals/ 下同名文件）"
@@ -45,6 +49,19 @@ yarrow_classes:
 # 不在上面的都是常规档：加必过检查、收紧分档、删或放宽非必过检查、新增第三方 action、workflow 对外联网、A/B 意见不一致。
 # 提案路径白名单：PR 检查用这一份；发布（policy-publish）不读它，用 workflow 里写死的同一份映射，
 # 所以改这里扩大不了发布范围。两边不一致时以 workflow 为准，gate-summary 报红。
+# 业务 PR 的改动范围（门禁 scope 检查，替代业务仓库 check-scope.sh）。范围名单读业务仓库 main 上的 board.json，不读 PR 里那份。
+# 分支名只用来选范围：先按 board.json modules[].branch 匹配（等于或 "<branch>-xxx"），模块分支能改 paths + module_extra；
+#   对不上模块就按 branch_kinds 前缀选；都对不上 => 报红。paths: global 表示 main 上 scope.global。
+# 任何路径都还得在 main 的 scope.global 里；第 6 类路径不查范围、进 Yarrow 档。删除和改名照常检查，没有 skills 例外。
+scope:
+  module_extra: ["notes/", "board.json", "reports/", "memory/", "tests/"]
+  branch_kinds:
+    - {prefix: "lead/", paths: global}
+    - {prefix: "ci/", paths: [".github/", "scripts/", "ci/", "decisions/", "notes/", "board.json", "reports/", "memory/"]}
+    - {prefix: "tests/", paths: ["tests/", "notes/", "board.json", "reports/", "memory/", "skills/", ".gitignore"]}
+    - {prefix: "bookkeeping/", paths: ["board.json", "notes/", "reports/", "memory/"]}
+  board_task_keys: ["version", "updated_at", "processed_events", "prs", "tasks", "decisions_log"]
+  board_module_keys: ["id", "branch", "paths"]
 proposal_paths:
   - "policy-proposals/required-checks.yaml"
   - "policy-proposals/key-acceptance-tests.yaml"

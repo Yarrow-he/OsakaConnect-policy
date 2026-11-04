@@ -10,8 +10,18 @@ CI = {"yarrow_classes": {
     "2_permissions": {"paths": ["policy-repo:scripts/**", "policy-proposals/scripts/**", ".github/CODEOWNERS"],
                       "diff_patterns": ["permissions\\s*:"]},
     "3_key_acceptance_list": {"paths": ["policy-proposals/key-acceptance-tests.yaml"]},
-    "4_pr_size": {"paths": []}, "5_loosen_gate": {"rules": []}},
-    "proposal_paths": []}
+    "4_pr_size": {"paths": []}, "5_loosen_gate": {"rules": []},
+    "6_protected_config": {"paths": [".codex/**", ".claude/**", ".github/workflows/**", "scripts/check-*.sh"]},
+    "7_board_scope": {"paths": []}},
+    "proposal_paths": [],
+    "scope": {"module_extra": ["notes/", "board.json", "tests/"],
+              "branch_kinds": [{"prefix": "lead/", "paths": "global"}, {"prefix": "tests/", "paths": ["tests/", "board.json"]}],
+              "board_task_keys": ["version", "updated_at", "prs", "tasks", "decisions_log"],
+              "board_module_keys": ["id", "branch", "paths"]}}
+BOARD = {"version": 1, "tasks": [], "prs": {},
+         "scope": {"global": ["src/", "tests/", "README.md", "board.json", "server/", "notes/", ".github/", "scripts/"],
+                   "protected": [".codex/", ".claude/"]},
+         "modules": [{"id": "server-core", "branch": "server/server-core", "paths": ["server/"], "state": "待写"}]}
 RC = {"repo": "Yarrow-he/OsakaConnect", "branch": "main", "strict": False,
       "branch_protection": [{"context": "python", "expected_source": {"app_id": 15368}}],
       "gate_verified": [{"context": "pr-size", "expected_source": {"app_id": 5592067}}]}
@@ -29,6 +39,7 @@ def pr(files, **kw):
     d = {"pr": 7, "head": HEAD, "files": files, "reviews": [],
          "check_runs": [{"id": 1, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "success", "suite": 9}],
          "meta": {"title": "t", "body": "", "commits": [{"message": "m", "names": list(gate.ME) * 2}]},
+         "head_ref": "lead/x", "base_ref": "main", "main_board": copy.deepcopy(BOARD),
          "head_paths": ["tests/a.sh"], "ci_jobs": {"jobs": {"python": {"steps": [{"run": "bash tests/a.sh"}]}}}, "proposal_yaml": {}}
     d.update(kw)
     return d
@@ -118,6 +129,79 @@ class ApprovalClass(unittest.TestCase):
     def test_parse_error_fails(self):
         p = "policy-proposals/pr-size.yaml"
         self.assertEqual(self.cls([f(p, "@@\n+x\n")], {p: {"error": "bad"}})[0], "failure")
+
+
+class Scope(unittest.TestCase):
+    def run_(self, files, **kw):
+        c = by_name(gate.evaluate(pr(files, **kw), CFG, GLOB))["ci-approval-class"]
+        return c["conclusion"], c["title"], c["summary"]
+
+    def test_module_branch_in_and_out(self):
+        self.assertEqual(self.run_([f("server/a.py", "@@\n+x\n")], head_ref="server/server-core-2")[:2], ("success", "class=regular"))
+        c, _, s = self.run_([f("src/a.py", "@@\n+x\n")], head_ref="server/server-core")
+        self.assertEqual(c, "failure"); self.assertIn("超出模块 server-core", s)
+
+    def test_fake_lead_setup_gets_no_exception(self):
+        for p in (".codex/config.toml", ".claude/settings.json"):
+            c, t, s = self.run_([f(p, "@@\n+x\n")], head_ref="lead/setup-x")
+            self.assertEqual((c, t), ("success", "class=yarrow")); self.assertIn("6_protected_config", s)
+
+    def test_delete_and_rename_checked(self):
+        c, _, s = self.run_([f("admin/old.cs", "", status="removed")], head_ref="lead/x")
+        self.assertEqual(c, "failure"); self.assertIn("admin/old.cs", s)
+        c, _, s = self.run_([f("server/b.py", "", status="renamed", previous_filename="admin/b.py")], head_ref="server/server-core")
+        self.assertEqual(c, "failure"); self.assertIn("admin/b.py", s)
+        c, t, _ = self.run_([f("server/b.py", "", status="renamed", previous_filename=".codex/x")], head_ref="server/server-core")
+        self.assertEqual((c, t), ("success", "class=yarrow"))
+        c, t, _ = self.run_([f(".github/workflows/ci.yml", "", status="removed")], head_ref="lead/x")
+        self.assertEqual((c, t), ("success", "class=yarrow"))
+
+    def test_unknown_branch_blocked(self):
+        for ref in ("feature/x", "android/android-shell", "server/server-cor"):
+            self.assertEqual(self.run_([f("server/a.py", "@@\n+x\n")], head_ref=ref)[0], "failure", ref)
+        self.assertEqual(self.run_([f("server/a.py", "@@\n+x\n")], head_ref="lead/x", base_ref="dev")[0], "failure")
+        self.assertEqual(self.run_([f("server/a.py", "@@\n+x\n")], head_ref=None)[0], "failure")
+        self.assertEqual(self.run_([f("server/a.py", "@@\n+x\n")], main_board=None)[0], "failure")
+        bad = copy.deepcopy(BOARD); bad["scope"]["global"] = "server/"
+        self.assertEqual(self.run_([f("server/a.py", "@@\n+x\n")], main_board=bad)[0], "failure")
+
+    def test_skills_no_exception(self):
+        self.assertEqual(self.run_([f(".codex/skills/a.md", "@@\n+x\n")], head_ref="tests/x")[1], "class=yarrow")
+        self.assertEqual(self.run_([f("skills/a.md", "@@\n+x\n")], head_ref="tests/x")[0], "failure")
+
+    def test_board_tasks_regular_scope_yarrow(self):
+        h = copy.deepcopy(BOARD); h["tasks"].append({"id": 1}); h["modules"][0]["state"] = "完成"; h["version"] = 2
+        ff = [f("board.json", "@@\n+x\n")]
+        self.assertEqual(self.run_(ff, board_change={"base": BOARD, "head": h})[:2], ("success", "class=regular"))
+        for mut in (lambda b: b["scope"]["global"].append("admin/"), lambda b: b["modules"][0]["paths"].append("src/"),
+                    lambda b: b["modules"].append({"id": "x", "branch": "lead/x", "paths": []}), lambda b: b.update(newkey=1)):
+            h = copy.deepcopy(BOARD); mut(h)
+            c, t, s = self.run_(ff, board_change={"base": BOARD, "head": h})
+            self.assertEqual((c, t), ("success", "class=yarrow")); self.assertIn("7_board_scope", s)
+            self.assertNotIn("admin/", s.split("7_board_scope")[1])   # 不回显内容
+        self.assertEqual(self.run_(ff, board_change={"base": BOARD, "head": None})[1], "class=yarrow")
+        self.assertEqual(self.run_(ff, board_change={"error": "x"})[0], "failure")
+
+    def test_workflow_and_check_scripts_yarrow(self):
+        for p in (".github/workflows/ci.yml", ".github/workflows/new.yml", "scripts/check-scope.sh", "scripts/check-merge-scope.sh"):
+            for ref in ("lead/x", "server/server-core"):
+                c, t, s = self.run_([f(p, "@@\n+echo ok\n")], head_ref=ref)
+                self.assertEqual(t, "class=yarrow", (p, ref))
+                if ref == "lead/x":
+                    self.assertEqual(c, "success")
+        self.assertEqual(self.run_([f("scripts/other.sh", "@@\n+x\n")], head_ref="lead/x")[1], "class=regular")
+
+    def test_scope_from_main_not_pr(self):
+        # PR 里把 board.json scope 改宽：范围仍按 main，且 board 改动进 Yarrow 档
+        h = copy.deepcopy(BOARD); h["scope"]["global"].append("admin/")
+        c, _, s = self.run_([f("board.json", "@@\n+x\n"), f("admin/a.cs", "@@\n+x\n")], head_ref="lead/x",
+                            board_change={"base": BOARD, "head": h})
+        self.assertEqual(c, "failure"); self.assertIn("admin/a.cs 不在 main", s)
+
+    def test_realname_path_not_echoed(self):
+        nm = "ha" + "o_yi" + "n"
+        c, _, s = self.run_([f("x/" + nm + ".txt", "@@\n+x\n")])
+        self.assertEqual(c, "failure"); self.assertNotIn(nm, s)
 
 
 class Owner(unittest.TestCase):

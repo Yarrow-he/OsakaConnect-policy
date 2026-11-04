@@ -1,0 +1,21 @@
+name: cron-diagnostic
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Record trigger and UTC time
+        shell: bash
+        run: |
+          echo "event=$GITHUB_EVENT_NAME"
+          echo "run_id=$GITHUB_RUN_ID"
+          echo "sha=$GITHUB_SHA"
+          date -u '+utc=%Y-%m-%dT%H:%M:%SZ'

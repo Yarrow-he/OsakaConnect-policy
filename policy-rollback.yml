@@ -1,0 +1,48 @@
+# 恢复入口，只能由 Hao Yin 手动触发。权限类（Hao Yin 档②）。和 policy-publish 共用 concurrency 组 policy-write。
+# 三选一：rollback=<策略仓库里的发布提交号>（只撤销它改的策略文件，登记 divergence）；
+#         skip=<PR号>（作废发布失败、卡住队列的提案）；bootstrap=<引导合并提交号>（上线第 9 步，核对一致后解除 bootstrap 暂停）。
+name: policy-rollback
+on:
+  workflow_dispatch:
+    inputs:
+      rollback: {type: string, default: "", description: "要回滚的发布提交号（策略仓库，40 位）"}
+      skip: {type: string, default: "", description: "要作废的提案 PR 号（找不到 PR 时填合并提交号）"}
+      bootstrap: {type: string, default: "", description: "引导合并提交号（只在上线时用）"}
+permissions: {}
+concurrency: {group: policy-write, cancel-in-progress: false}
+jobs:
+  run:
+    if: github.actor == 'Yarrow-he' && github.triggering_actor == 'Yarrow-he'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: gate
+    permissions: {}
+    steps:
+      - id: pol
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect-policy,
+               permission-contents: write}
+      - id: biz
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect,
+               permission-contents: read}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {token: "${{ steps.pol.outputs.token }}", ref: main, path: policy, persist-credentials: false}
+      - env:
+          POL_TOKEN: ${{ steps.pol.outputs.token }}
+          BIZ_TOKEN: ${{ steps.biz.outputs.token }}
+          RB: ${{ inputs.rollback }}
+          SK: ${{ inputs.skip }}
+          BS: ${{ inputs.bootstrap }}
+        run: |
+          set -euo pipefail
+          n=0; for v in "$RB" "$SK" "$BS"; do [ -n "$v" ] && n=$((n+1)); done
+          [ "$n" = 1 ] || { echo "::error::rollback、skip、bootstrap 只能填一个"; exit 1; }
+          if [ -n "$RB" ]; then python3 policy/.github/workflows/gatelib.py rollback "$RB"
+          elif [ -n "$SK" ]; then [[ "$SK" =~ ^([0-9]+|[0-9a-f]{40})$ ]] || { echo "::error::skip 要 PR 号或 40 位合并提交号"; exit 1; }; python3 policy/.github/workflows/gatelib.py skip "$SK"
+          else python3 policy/.github/workflows/gatelib.py bootstrap "$BS"; fi
+  sync:
+    needs: run
+    uses: ./.github/workflows/policy-sync-protection.yml
+    with: {dry_run: false}
+    secrets: {GATE_APP_PRIVATE_KEY: "${{ secrets.GATE_APP_PRIVATE_KEY }}"}

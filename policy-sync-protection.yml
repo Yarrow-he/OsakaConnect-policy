@@ -1,0 +1,32 @@
+# 把策略仓库 main 上 required-checks.yaml 的 branch_protection 层同步到 OsakaConnect main 的分支保护。权限类（Hao Yin 档②）。
+# 只被 policy-publish、policy-rollback 调用（在它们的 policy-write 组里）。gate-summary、lead-merge-approved 已在线上时永不删除。
+# 注意：administration 写权限能改全部分支保护，"只改必过检查"是 gatelib.py 的约束，不是令牌边界。
+name: policy-sync-protection
+on:
+  workflow_call:
+    inputs:
+      dry_run: {type: boolean, default: false}
+    secrets:
+      GATE_APP_PRIVATE_KEY: {required: true}
+permissions: {}
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: gate
+    permissions: {}
+    steps:
+      - id: pol
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect-policy,
+               permission-contents: read}
+      - id: adm
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect,
+               permission-administration: "${{ inputs.dry_run && 'read' || 'write' }}"}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {token: "${{ steps.pol.outputs.token }}", ref: main, path: policy, persist-credentials: false}
+      - env: {ADMIN_TOKEN: "${{ steps.adm.outputs.token }}", DRY: "${{ inputs.dry_run }}"}
+        run: |
+          if [ "$DRY" = true ]; then python3 policy/.github/workflows/gatelib.py sync policy --dry-run
+          else python3 policy/.github/workflows/gatelib.py sync policy; fi

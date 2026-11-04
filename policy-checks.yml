@@ -1,0 +1,68 @@
+# 给 OsakaConnect 的 open PR 算 pr-size、ci-approval-class、owner-approval、gate-summary 并写回。权限类（Hao Yin 档②）。
+# 三个 job：fetch 只读取数据；compute 跑检查器（没有任何令牌和 secrets）；write 只写 check run（不跑检查器）。
+# 任何 job 都不检出、不执行 OsakaConnect PR 的代码，PR 内容只经 API 读。逻辑在 gatelib.py（同目录，同样只能临时管理员放行推）。
+name: policy-checks
+on:
+  schedule: [{cron: "*/5 * * * *"}]
+  workflow_dispatch: {}
+permissions: {}
+concurrency: {group: policy-checks, cancel-in-progress: false}
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: gate
+    permissions: {}
+    steps:
+      - id: pol
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect-policy,
+               permission-contents: read}
+      - id: biz
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect,
+               permission-contents: read, permission-pull-requests: read, permission-checks: read}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {token: "${{ steps.pol.outputs.token }}", ref: main, path: policy, persist-credentials: false}
+      - env: {BIZ_TOKEN: "${{ steps.biz.outputs.token }}"}
+        run: |
+          python3 policy/.github/workflows/gatelib.py fetch policy in fetch
+          cp -r policy/scripts in/policy-scripts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with: {name: in, path: in/}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with: {name: fetch, path: fetch/}
+  compute:
+    needs: fetch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: {name: in, path: in}
+      - run: python3 in/policy-scripts/gate.py in out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with: {name: out, path: out/}
+  write:
+    needs: compute
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: gate
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: {name: out, path: out}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: {name: fetch, path: fetch}
+      - id: pol
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect-policy,
+               permission-contents: read}
+      - id: ck
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect,
+               permission-checks: write, permission-pull-requests: read}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {token: "${{ steps.pol.outputs.token }}", ref: main, path: policy, persist-credentials: false}
+      - env: {CK_TOKEN: "${{ steps.ck.outputs.token }}", POL_TOKEN: "${{ steps.pol.outputs.token }}"}
+        run: python3 policy/.github/workflows/gatelib.py write out fetch/fetch.json

@@ -1,0 +1,33 @@
+# 发布已合并的提案（一次一个，策略文件和 state.json 在同一个提交里），然后把分支保护对齐生效策略。权限类（Hao Yin 档②）。
+# 和 policy-rollback 共用 concurrency 组 policy-write。失败就让 job 变红，GitHub 发失败通知。
+name: policy-publish
+on:
+  schedule: [{cron: "2-59/5 * * * *"}]
+  workflow_dispatch: {}
+permissions: {}
+concurrency: {group: policy-write, cancel-in-progress: false}
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: gate
+    permissions: {}
+    steps:
+      - id: pol
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect-policy,
+               permission-contents: write}
+      - id: biz
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with: {app-id: "5592067", private-key: "${{ secrets.GATE_APP_PRIVATE_KEY }}", owner: Yarrow-he, repositories: OsakaConnect,
+               permission-contents: read, permission-pull-requests: read, permission-checks: write}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {token: "${{ steps.pol.outputs.token }}", ref: main, path: policy, persist-credentials: false}
+      - env: {POL_TOKEN: "${{ steps.pol.outputs.token }}", BIZ_TOKEN: "${{ steps.biz.outputs.token }}"}
+        run: python3 policy/.github/workflows/gatelib.py publish
+  sync:
+    needs: publish
+    if: always()
+    uses: ./.github/workflows/policy-sync-protection.yml
+    with: {dry_run: false}
+    secrets: {GATE_APP_PRIVATE_KEY: "${{ secrets.GATE_APP_PRIVATE_KEY }}"}

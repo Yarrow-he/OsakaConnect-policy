@@ -12,14 +12,12 @@ branch_protection:
   - {context: python,             expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
   - {context: android,            expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
   - {context: windows-dotnet,     expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
-  - {context: guards,             expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
   - {context: android-emulator,   expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
   - {context: windows-acceptance, expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
   - {context: a10-docker,         expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
   - {context: guards-acceptance,  expected_source: {app_id: 15368, workflow: .github/workflows/ci.yml}}
-  # 上线清单第 9 步前保持注释，按清单取消注释、走一次提案发布同步：
-  # - {context: gate-summary,        expected_source: {app_id: 5592067}}
-  # - {context: lead-merge-approved, expected_source: {app_id: 5594597}}
+  - {context: gate-summary,        expected_source: {app_id: 5592067}}
+  - {context: lead-merge-approved, expected_source: {app_id: 5594597}}
 gate_verified:
   - {context: pr-size,           expected_source: {app_id: 5592067}}
   - {context: ci-approval-class, expected_source: {app_id: 5592067}}

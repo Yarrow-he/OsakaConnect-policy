@@ -5,7 +5,7 @@ import gate
 PS = {"threshold": 200, "exclude_paths": ["tests/**", "**/*.md", "policy-proposals/*.yaml"], "scaffold_temp": [],
       "log_functions": {"python": ["logger.info"], "kotlin": ["Log.d"]},
       "comment_syntax": {"python": {"line": ["#"], "docstring_only": True}, "kotlin": {"line": ["//"], "block": [["/*", "*/"]]}}}
-CI = {"hao_yin_classes": {
+CI = {"yarrow_classes": {
     "1_secrets": {"paths": [], "diff_patterns": ["PRIVATE_KEY"]},
     "2_permissions": {"paths": ["policy-repo:scripts/**", "policy-proposals/scripts/**", ".github/CODEOWNERS"],
                       "diff_patterns": ["permissions\\s*:"]},
@@ -28,6 +28,7 @@ def f(name, patch, **kw):
 def pr(files, **kw):
     d = {"pr": 7, "head": HEAD, "files": files, "reviews": [],
          "check_runs": [{"id": 1, "name": "python", "app_id": 15368, "status": "completed", "conclusion": "success", "suite": 9}],
+         "meta": {"title": "t", "body": "", "commits": [{"message": "m", "names": ["osaka-work", "x@users.noreply.github.com"]}]},
          "head_paths": ["tests/a.sh"], "ci_jobs": {"jobs": {"python": {"steps": [{"run": "bash tests/a.sh"}]}}}, "proposal_yaml": {}}
     d.update(kw)
     return d
@@ -71,12 +72,12 @@ class ApprovalClass(unittest.TestCase):
         self.assertEqual(self.cls([f("src/a.py", "@@\n+x=1\n")])[:2], ("success", "regular"))
 
     def test_scripts_path_and_secret_pattern(self):
-        self.assertEqual(self.cls([f("policy-proposals/scripts/gate.py", "@@\n+x\n")])[1], "haoyin")
-        self.assertEqual(self.cls([f("src/a.py", "@@\n+k = PRIVATE_KEY\n")])[1], "haoyin")
+        self.assertEqual(self.cls([f("policy-proposals/scripts/gate.py", "@@\n+x\n")])[1], "yarrow")
+        self.assertEqual(self.cls([f("src/a.py", "@@\n+k = PRIVATE_KEY\n")])[1], "yarrow")
 
     def test_permission_pattern_only_in_github_dir(self):
         self.assertEqual(self.cls([f("src/a.py", "@@\n+permissions: x\n")])[1], "regular")
-        self.assertEqual(self.cls([f(".github/workflows/ci.yml", "@@\n+permissions: write-all\n")])[1], "haoyin")
+        self.assertEqual(self.cls([f(".github/workflows/ci.yml", "@@\n+permissions: write-all\n")])[1], "yarrow")
 
     def test_bad_proposal_path_fails(self):
         self.assertEqual(self.cls([f("policy-proposals/.github/workflows/x.yml", "@@\n+x\n")])[0], "failure")
@@ -88,19 +89,19 @@ class ApprovalClass(unittest.TestCase):
         more = copy.deepcopy(RC); more["branch_protection"].append({"context": "lint", "expected_source": {"app_id": 15368}})
         self.assertEqual(gate.approval_class(ff, {p: {"base": RC, "head": more}}, CI, PS, {"lint"})[1], "regular")
         self.assertEqual(self.cls(ff, {p: {"base": RC, "head": more}})[0], "failure")    # 新业务检查在 head 上没出现过
-        self.assertEqual(gate.approval_class(ff, {p: {"base": more, "head": RC}}, CI, PS, {"lint"})[1], "haoyin")
+        self.assertEqual(gate.approval_class(ff, {p: {"base": more, "head": RC}}, CI, PS, {"lint"})[1], "yarrow")
         bad = copy.deepcopy(RC); bad["gate_verified"].append({"context": "new-gate", "expected_source": {"app_id": 5592067}})
         self.assertEqual(self.cls(ff, {p: {"base": RC, "head": bad}})[0], "failure")     # 闸口不写这个检查
         bad = copy.deepcopy(RC); bad["gate_verified"].append({"context": "x", "expected_source": {"app_id": "15368"}})
         self.assertEqual(self.cls(ff, {p: {"base": RC, "head": bad}})[0], "failure")     # app_id 不是整数
         moved = copy.deepcopy(RC); moved["gate_verified"].append(moved["branch_protection"].pop())
-        self.assertEqual(gate.approval_class(ff, {p: {"base": RC, "head": moved}}, CI, PS, {"python"})[1], "haoyin")
+        self.assertEqual(gate.approval_class(ff, {p: {"base": RC, "head": moved}}, CI, PS, {"python"})[1], "yarrow")
 
     def test_pr_size_keys_and_comment_syntax(self):
         p = "policy-proposals/pr-size.yaml"
         ff = [f(p, "@@\n+x\n")]
         h = copy.deepcopy(PS); h["threshold"] = 300
-        self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[1], "haoyin")
+        self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[1], "yarrow")
         h = copy.deepcopy(PS); h["comment_syntax"]["python"]["line"] = ["#", "x"]
         self.assertEqual(self.cls(ff, {p: {"base": PS, "head": h}})[0], "failure")
         h = copy.deepcopy(PS); h["comment_syntax"]["python"]["docstring_only"] = False
@@ -123,11 +124,11 @@ class Owner(unittest.TestCase):
     def test_rules(self):
         R = lambda s, c=HEAD, u="Yarrow-he": {"user": u, "state": s, "commit_id": c}
         self.assertEqual(gate.owner_approval("regular", [], HEAD, "Yarrow-he")[0], "success")
-        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED")], HEAD, "Yarrow-he")[0], "success")
-        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED"), R("COMMENTED")], HEAD, "Yarrow-he")[0], "success")
-        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED", "old")], HEAD, "Yarrow-he")[0], "failure")
-        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED"), R("DISMISSED")], HEAD, "Yarrow-he")[0], "failure")
-        self.assertEqual(gate.owner_approval("haoyin", [R("APPROVED", u="bot")], HEAD, "Yarrow-he")[0], "failure")
+        self.assertEqual(gate.owner_approval("yarrow", [R("APPROVED")], HEAD, "Yarrow-he")[0], "success")
+        self.assertEqual(gate.owner_approval("yarrow", [R("APPROVED"), R("COMMENTED")], HEAD, "Yarrow-he")[0], "success")
+        self.assertEqual(gate.owner_approval("yarrow", [R("APPROVED", "old")], HEAD, "Yarrow-he")[0], "failure")
+        self.assertEqual(gate.owner_approval("yarrow", [R("APPROVED"), R("DISMISSED")], HEAD, "Yarrow-he")[0], "failure")
+        self.assertEqual(gate.owner_approval("yarrow", [R("APPROVED", u="bot")], HEAD, "Yarrow-he")[0], "failure")
         self.assertEqual(gate.owner_approval("error", [R("APPROVED")], HEAD, "Yarrow-he")[0], "failure")
 
 
@@ -139,6 +140,35 @@ class Summary(unittest.TestCase):
         c = self.ev(pr([f("src/a.py", "@@\n+x = 1\n")]))
         self.assertEqual(c["gate-summary"]["conclusion"], "success")
         self.assertIn("gen=3", c["gate-summary"]["summary"])
+
+    def test_realname(self):
+        nm = "Ha" + "o Yi" + "n"
+        em = "someone@example.org"   # 虚构邮箱：测试时临时换掉 BAD_EMAIL_SHA，源码不带真实邮箱
+        old = gate.BAD_EMAIL_SHA
+        gate.BAD_EMAIL_SHA = {gate.hashlib.sha256(em.encode()).hexdigest()}
+        self.addCleanup(setattr, gate, "BAD_EMAIL_SHA", old)
+        ok = pr([f("src/a.py", "@@\n+x = 1\n-" + nm + "\n")])
+        self.assertEqual(self.ev(ok)["gate-summary"]["conclusion"], "success")   # 删除真名不拦
+        for v in (nm, nm.upper(), nm.replace(" ", ""), nm.replace(" ", "_"), nm.lower()):
+            c = self.ev(pr([f("src/a.py", "@@\n+# by " + v + "\n")]))["gate-summary"]
+            self.assertEqual(c["conclusion"], "failure", v)
+            self.assertNotIn(v, c["summary"])
+        meta = lambda **k: dict({"title": "t", "body": "", "commits": [{"message": "m", "names": ["a", "b"]}]}, **k)
+        for m in (meta(title="x " + nm), meta(body=nm.lower()),
+                  meta(commits=[{"message": "fix per " + nm, "names": ["a", "b"]}]),
+                  meta(commits=[{"message": "m", "names": ["Yarrow-he", em.upper()]}]),
+                  meta(body="联系 " + em + "."), meta(body="<" + em + ">"),
+                  meta(commits=[{"message": "m", "names": [nm.replace(" ", ""), "b"]}])):
+            c = self.ev(pr([], meta=m))["gate-summary"]
+            self.assertEqual(c["conclusion"], "failure", m)
+            for v in (nm, nm.lower(), nm.replace(" ", ""), em, em.upper()):
+                self.assertNotIn(v.lower(), c["summary"].lower())
+        c = self.ev(pr([f(nm.lower() + ".md", "@@\n+" + nm + "\n")]))["gate-summary"]
+        self.assertEqual(c["conclusion"], "failure")
+        self.assertNotIn(nm.lower(), c["summary"].lower())
+        self.assertEqual(self.ev(pr([], meta=meta(body="Yarrow shang" + "hao" + "yinx yarrow@x.com")))["gate-summary"]["conclusion"], "success")
+        p = pr([]); del p["meta"]
+        self.assertEqual(self.ev(p)["gate-summary"]["conclusion"], "failure")
 
     def test_paused_and_pending_and_incomplete(self):
         self.assertEqual(self.ev(pr([]), paused={"by": "bootstrap"})["gate-summary"]["conclusion"], "failure")
@@ -159,7 +189,7 @@ class Summary(unittest.TestCase):
         runs = [{"id": 1, "name": "python", "app_id": 99, "status": "completed", "conclusion": "success", "suite": 9}]
         self.assertIsNone(self.ev(pr([], check_runs=runs))["gate-summary"]["conclusion"])               # 别的来源不认
 
-    def test_haoyin_needs_approval_and_selftest(self):
+    def test_yarrow_needs_approval_and_selftest(self):
         files = [f("policy-proposals/scripts/gate.py", "@@\n+x = 1\n")]
         c = self.ev(pr(files))
         self.assertEqual(c["owner-approval"]["conclusion"], "failure")

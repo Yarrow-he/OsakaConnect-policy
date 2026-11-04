@@ -8,18 +8,22 @@ policy-checks 的 compute job 运行：python3 gate.py <in目录> <out目录>
 输出 out/<PR>.json {pr, head, checks:[{name, conclusion|None, title, summary}]}，conclusion=None 表示还没出结果。
 只依赖标准库，改本文件算权限类。
 """
-import json, os, re, sys
+import hashlib, json, os, re, sys
 
 OWN = ("pr-size", "ci-approval-class", "owner-approval")
 NOT_IN_SUMMARY = ("gate-summary", "lead-merge-approved") + OWN
 ACTIONS_APP = 15368
+# 真名检查：源码里不写明文。名字用拆开的正则（大小写、空格/下划线/点/连字符/连写都算），邮箱只存 sha256。
+REALNAME_RE = re.compile(r"(?<![a-z])ha[o][\s_.\-]*yi[n](?![a-z])", re.I)
+BAD_EMAIL_SHA = {"12bc2f211a7d8c1a7b4924029b7e26250821d2ee3199d8aa16041700397409b5"}
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+")
 LANG = {".py": "python", ".kt": "kotlin", ".cs": "csharp", ".kts": "kts", ".yml": "yaml",
         ".yaml": "yaml", ".sh": "shell", ".ps1": "powershell"}
 SCHEMA = {
     "pr-size.yaml": {"threshold", "exclude_paths", "scaffold_temp", "log_functions", "comment_syntax"},
     "required-checks.yaml": {"repo", "branch", "strict", "branch_protection", "gate_verified"},
     "key-acceptance-tests.yaml": {"tests"},
-    "ci-approval-class.yaml": {"hao_yin_classes", "proposal_paths"},
+    "ci-approval-class.yaml": {"yarrow_classes", "proposal_paths"},
 }
 PROPOSAL_RE = re.compile(r"^policy-proposals/((required-checks|key-acceptance-tests|pr-size|ci-approval-class)\.yaml"
                          r"|scripts/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$")
@@ -190,9 +194,9 @@ def validate(name, d):
 
 
 def approval_class(files, yamls, ci_cfg, ps_cfg, known_checks=()):
-    """返回 (conclusion, cls, reasons)。cls: haoyin|regular。yamls: {路径: {base, head, error}}（JSON 化后的提案 YAML）。"""
+    """返回 (conclusion, cls, reasons)。cls: yarrow|regular。yamls: {路径: {base, head, error}}（JSON 化后的提案 YAML）。"""
     reasons, errors = [], []
-    classes = ci_cfg["hao_yin_classes"]
+    classes = ci_cfg["yarrow_classes"]
     for f in files:
         names = [f["filename"]] + ([f["previous_filename"]] if f.get("previous_filename") else [])
         for p in names:
@@ -259,22 +263,22 @@ def approval_class(files, yamls, ci_cfg, ps_cfg, known_checks=()):
     if errors:
         return "failure", "error", "\n".join(errors + reasons)
     if reasons:
-        return "success", "haoyin", "Hao Yin 档：\n" + "\n".join(sorted(set(reasons)))
+        return "success", "yarrow", "Yarrow 档：\n" + "\n".join(sorted(set(reasons)))
     return "success", "regular", "常规档"
 
 
 def owner_approval(cls, reviews, head, owner):
     if cls == "regular":
-        return "success", "常规档，不需要 Hao Yin 批准"
-    if cls != "haoyin":
+        return "success", "常规档，不需要 Yarrow 批准"
+    if cls != "yarrow":
         return "failure", "分档失败，无法判断"
     last = None
     for r in reviews:          # API 按时间顺序返回
         if (r.get("user") or "").lower() == owner.lower() and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
             last = r
     if last and last["state"] == "APPROVED" and last.get("commit_id") == head:
-        return "success", f"Hao Yin 已批准当前 head {head[:10]}"
-    return "failure", "Hao Yin 档：需要 Hao Yin 对当前 head 的批准"
+        return "success", f"Yarrow 已批准当前 head {head[:10]}"
+    return "failure", "Yarrow 档：需要 Yarrow 对当前 head 的批准"
 
 
 def check_status(runs, name, app_id):
@@ -313,6 +317,38 @@ def key_tests(kcfg, head_paths, ci_jobs):
     return errs
 
 
+def _bad(text):
+    text = text or ""
+    if REALNAME_RE.search(text):
+        return True
+    return any(hashlib.sha256(m.rstrip(".-").lower().encode()).hexdigest() in BAD_EMAIL_SHA for m in EMAIL_RE.findall(text))
+
+
+def realname(pr):
+    """返回命中位置列表（不回显命中的内容）。只看新增行、文件名、提交信息、作者/提交者、PR 标题正文。"""
+    hits = []
+    for k, f in enumerate(pr.get("files") or [], 1):
+        where = f"第 {k} 个文件" if _bad(f["filename"]) else f["filename"]   # 文件名本身带真名就只报序号
+        if where != f["filename"]:
+            hits.append(where + "的文件名")
+        added = [ln[1:] for ln in (f.get("patch") or "").split("\n") if ln.startswith("+") and not ln.startswith("+++")]
+        if any(_bad(x) for x in added):
+            hits.append(where + " 的新增行")
+    m = pr.get("meta")
+    if m is None:
+        return ["缺 PR 元数据"]
+    if _bad(m.get("title")):
+        hits.append("PR 标题")
+    if _bad(m.get("body")):
+        hits.append("PR 正文")
+    for i, c in enumerate(m.get("commits") or [], 1):
+        if _bad(c.get("message")):
+            hits.append(f"第 {i} 个提交的提交信息")
+        if any(_bad(x) for x in c.get("names") or []):
+            hits.append(f"第 {i} 个提交的作者/提交者")
+    return hits
+
+
 def evaluate(pr, cfg, glob):
     """算一个 PR 的四个门禁检查。返回 checks 列表。"""
     out = []
@@ -338,6 +374,9 @@ def evaluate(pr, cfg, glob):
     out.append({"name": "owner-approval", "conclusion": c3, "title": "owner-approval", "summary": s3})
 
     fails, pend = [], []
+    rn = realname(pr)
+    if rn:
+        fails.append("真名：不能出现用户真名或个人邮箱，一律写 Yarrow，邮箱用 GitHub noreply。位置：" + "；".join(rn))
     for o in out:
         if o["conclusion"] != "success":
             fails.append(f"{o['name']}: {o['conclusion']}")

@@ -2,10 +2,10 @@
 # 路径默认指 OsakaConnect；"policy-repo:" 前缀指策略仓库（目前策略仓库没有 PR 流程，这些条目给将来用）。
 # 直接拒绝（检查 failure，PR 不能合并）：policy-proposals/.github/**，以及 policy-proposals/ 下白名单以外的路径。
 #   策略仓库的 workflow 不走提案，见 README。
-# 命中任一条 => Hao Yin 档；都不命中 => 常规档。解析失败或遇到动态结构 => 报红，不默认常规档。
-# 放宽本文件（让 Hao Yin 档变少）属于第⑤类。
+# 命中任一条 => Yarrow 档；都不命中 => 常规档。解析失败或遇到动态结构 => 报红，不默认常规档。
+# 放宽本文件（让 Yarrow 档变少）属于第⑤类。
 # required-checks.yaml 按 (层级, context, source) 比较：检查从 branch_protection 层移到 gate_verified 层也算删除必过检查（第⑤类）。
-hao_yin_classes:
+yarrow_classes:
   "1_secrets":
     paths: []
     diff_patterns: ['secrets\s*[.\[]', 'toJSON\s*\(\s*secrets', 'secrets:\s*inherit', 'OSAKA_[A-Z_]*KEY', 'PRIVATE_KEY']
@@ -39,7 +39,7 @@ hao_yin_classes:
       - "ci-approval-class.yaml 删除或放宽任一规则（含 policy-proposals/ 下同名文件）"
       - "required-checks.yaml 的 strict 由 true 改 false，或改动 repo、branch 字段"
     needs_plain_explanation: true
-# comment_syntax 改动是常规档（Hao Yin 已定），但每种语言只能从检查器内置的候选分隔符里选，选了候选外的 => failure，
+# comment_syntax 改动是常规档（Yarrow 已定），但每种语言只能从检查器内置的候选分隔符里选，选了候选外的 => failure，
 #   防止把运行代码改判成注释。
 # 未知键、重复键、类型错误：策略仓库任一 YAML 出现脚本不认识的键 => 报红（不默认常规档）。
 # 不在上面的都是常规档：加必过检查、收紧分档、删或放宽非必过检查、新增第三方 action、workflow 对外联网、A/B 意见不一致。

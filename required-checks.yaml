@@ -2,7 +2,7 @@
 # 分两层：
 #   branch_protection：同步进 GitHub 分支保护的检查（稳定，很少变）。
 #   gate_verified：不进分支保护，由 gate-summary 逐项核对（来源、head、结论 success）。增删它们不用改分支保护。
-# 加检查（任一层）：常规档。删检查、把来源改宽、strict 由 true 改 false：Hao Yin 档第⑤类。
+# 加检查（任一层）：常规档。删检查、把来源改宽、strict 由 true 改 false：Yarrow 档第⑤类。
 # 15368 = GitHub Actions；5592067 = 闸口 App osaka-gate；5594597 = 组长 App osaka-lead。
 repo: Yarrow-he/OsakaConnect
 branch: main

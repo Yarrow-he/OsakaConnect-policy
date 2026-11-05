@@ -25,11 +25,7 @@ exclude_paths:
   # 策略提案里的纯配置（YAML）；提案里的脚本照常计数
   - "policy-proposals/*.yaml"
 # 首次脚手架临时排除：合并后移出，每次增删要 Yarrow 批准。
-scaffold_temp:
-  # 首次搭建临时排除（PR #54 引导文件），引导完成后删掉。
-  - "policy-proposals/scripts/gate.py"
-  - "policy-proposals/scripts/test_gate.py"
-  - ".github/workflows/policy-selftest.yml"
+scaffold_temp: []
 # PR 总改动（新增+删除，不论计不计入）超过这个数时，pr-size 输出里自动列分类行数（只输出，不拦）
 breakdown_over: 600
 # 分类：按顺序取第一个命中的类别；都不命中算“运行代码和配置”

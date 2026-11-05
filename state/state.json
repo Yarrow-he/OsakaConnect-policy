@@ -4,22 +4,35 @@
   "generation": 2,
   "pr": null
  },
- "divergence": [],
- "generation": 2,
+ "divergence": [
+  {
+   "business_blob": "99036428aba0bba8b2e0d2341964c4e76af9d0a7",
+   "effective_blob": "bdb158eee13fdb4ce20609b0c7e730db4d076dda",
+   "path": "required-checks.yaml"
+  }
+ ],
+ "generation": 3,
  "history": [
   {
    "from_merge": "20083b9ed8b29b752f5e3d5ef20b10db600f5c2e",
    "generation": 2,
    "kind": "bootstrap"
+  },
+  {
+   "from_merge": "48c1e2e84a16b7b8462d2e12240cbe7b68faf828",
+   "generation": 3,
+   "kind": "skip",
+   "pr": "71"
   }
  ],
  "paused": null,
- "processed_through": "20083b9ed8b29b752f5e3d5ef20b10db600f5c2e",
+ "processed_through": "48c1e2e84a16b7b8462d2e12240cbe7b68faf828",
  "proposals": {
   "71": {
+   "generation": 3,
    "merge": "48c1e2e84a16b7b8462d2e12240cbe7b68faf828",
    "reason": "PR #71 head 上最新的 gate-summary 不是 success",
-   "result": "failed"
+   "result": "skipped"
   }
  },
  "schema": 1

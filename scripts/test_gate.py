@@ -6,7 +6,7 @@ PS = {"threshold": 200, "exclude_paths": ["tests/**", "**/*.md", "policy-proposa
       "log_functions": {"python": ["logger.info"], "kotlin": ["Log.d"]},
       "comment_syntax": {"python": {"line": ["#"], "docstring_only": True}, "kotlin": {"line": ["//"], "block": [["/*", "*/"]]}}}
 CI = {"yarrow_classes": {
-    "1_secrets": {"paths": [], "diff_patterns": ["PRIVATE_KEY"]},
+    "1_secrets": {"paths": [], "diff_patterns": ["(?i)secrets\\s*[.\\[]", "(?i)private[_-]?key", "(?i)osaka[_-]?[a-z0-9_]*[_-]?key"]},
     "2_permissions": {"paths": ["policy-repo:scripts/**", "policy-proposals/scripts/**", ".github/CODEOWNERS"],
                       "diff_patterns": ["permissions\\s*:"]},
     "3_key_acceptance_list": {"paths": ["policy-proposals/key-acceptance-tests.yaml"]},
@@ -17,7 +17,11 @@ CI = {"yarrow_classes": {
     "scope": {"module_extra": ["notes/", "board.json", "tests/"],
               "branch_kinds": [{"prefix": "lead/", "paths": "global"}, {"prefix": "tests/", "paths": ["tests/", "board.json"]}],
               "board_task_keys": ["version", "updated_at", "prs", "tasks", "decisions_log"],
-              "board_module_keys": ["id", "branch", "paths"]}}
+              "board_module_keys": ["id", "branch", "paths"],
+              "branch_name_patterns": ["^(server|android|windows)/[^/]+-[0-9]+$", "^ci/[^/]+-[0-9]+$",
+                                       "^(lead|tests|bookkeeping)/[^/]+$"],
+              "bookkeeping_paths": ["board.json", "notes/", "memory/", "reports/"],
+              "bookkeeping_mix_ok_prefixes": ["tests/", "ci/"]}}
 BOARD = {"version": 1, "tasks": [], "prs": {},
          "scope": {"global": ["src/", "tests/", "README.md", "board.json", "server/", "notes/", ".github/", "scripts/"],
                    "protected": [".codex/", ".claude/"]},
@@ -52,7 +56,7 @@ def by_name(checks):
 class PrSize(unittest.TestCase):
     def test_comments_blank_logs_not_counted(self):
         p = "@@ -1,3 +1,8 @@\n x = 1\n+# comment\n+\n+logger.info(\"hi %s\", name)\n+logger.info(foo())\n+y = 2\n-z = 3\n"
-        self.assertEqual(gate.count_patch("a.py", p, PS), 3)   # foo() 调用、y=2、删 z=3
+        self.assertEqual(gate.count_patch("a.py", p, PS), 2)   # foo() 调用、y=2；删 z=3 不计
 
     def test_kotlin_block_comment(self):
         p = "@@ -5,2 +5,6 @@\n fun a() {\n+/* start\n+ still comment\n+ end */\n+val b = 1\n+Log.d(TAG, \"x\")\n }\n"
@@ -68,11 +72,30 @@ class PrSize(unittest.TestCase):
         self.assertEqual(gate.pr_size(files, PS)[0], "failure")
         files = [f("img.png", None, binary=True), f("big.cs", None, additions=150, deletions=49)]
         c, s = gate.pr_size(files, PS)
-        self.assertEqual(c, "success"); self.assertIn("计入 200 行", s)
+        self.assertEqual(c, "success"); self.assertIn("计入 151 行", s)   # 缺补丁兜底只按新增行数计，删除不计
+        self.assertIn("缺补丁", s)
+        files = [f("big.cs", None, additions=201, deletions=0)]
+        self.assertEqual(gate.pr_size(files, PS)[0], "failure")
 
     def test_rename_out_of_excluded_counts(self):
         files = [f("src/b.py", "@@ -1 +1 @@\n-a = 1\n+a = 2\n", status="renamed", previous_filename="tests/b.py")]
-        self.assertIn("计入 2 行", gate.pr_size(files, PS)[1])
+        self.assertIn("计入 1 行", gate.pr_size(files, PS)[1])
+
+    def test_pure_deletion_and_modification(self):
+        self.assertEqual(gate.count_patch("a.py", "@@ -1,3 +0,0 @@\n-a = 1\n-b = 2\n-c = 3\n", PS), 0)
+        self.assertEqual(gate.count_patch("a.py", "@@ -1,2 +1,2 @@\n-a = 1\n-b = 2\n+a = 3\n+b = 4\n", PS), 2)
+        # 删掉一个块注释的开头：新文件一侧剩下的行变成运行代码，要计入
+        p = "@@ -1,3 +1,2 @@\n-/* old\n x = 1\n+y = 2\n"
+        self.assertEqual(gate.count_patch("A.kt", p, PS), 2)   # 第三轮：x = 1 从注释变成运行代码，也计入
+
+    def test_exclusion_reasons(self):
+        files = [f("tests/x.py", "@@ -1 +1 @@\n+a=1\n"), f("docs/a.md", "@@ -1 +1 @@\n+a\n"), f("src/a.py", "@@ -1 +1 @@\n+a = 1\n")]
+        c, s = gate.pr_size(files, PS)
+        self.assertIn("tests/x.py: 不计入（tests/x.py 命中排除路径 tests/**）", s)
+        self.assertIn("docs/a.md: 不计入（docs/a.md 命中排除路径 **/*.md）", s)
+        self.assertIn("src/a.py: 1", s)
+        ps = dict(PS, scaffold_temp=["android/**"])
+        self.assertIn("命中临时脚手架 android/**", gate.pr_size([f("android/b.kts", "@@ -0,0 +1 @@\n+x\n")], ps)[1])
 
 
 class ApprovalClass(unittest.TestCase):
@@ -251,13 +274,20 @@ class Summary(unittest.TestCase):
         self.assertEqual(c["conclusion"], "failure")
         self.assertNotIn(nm.lower(), c["summary"].lower())
         self.assertEqual(self.ev(pr([], meta=meta(body="Yarrow shang" + "hao" + "yinx yarrow@x.com")))["gate-summary"]["conclusion"], "success")
+        for cm in ([nm], ["ok", "感谢 " + nm.lower()], ["mail " + em]):
+            c = self.ev(pr([], meta=meta(comments=cm)))["gate-summary"]
+            self.assertEqual(c["conclusion"], "failure", cm)
+            self.assertIn("PR 评论", c["summary"]); self.assertNotIn(nm.lower(), c["summary"].lower())
+        self.assertEqual(self.ev(pr([], meta=meta(comments=["看起来没问题"])))["gate-summary"]["conclusion"], "success")
         p = pr([]); del p["meta"]
         self.assertEqual(self.ev(p)["gate-summary"]["conclusion"], "failure")
 
     def test_author(self):
         me, web = list(gate.ME), ["GitHub", "noreply@github.com"]
         meta = lambda *cs: {"title": "t", "body": "", "commits": [{"message": "m", "names": n} for n in cs]}
-        self.assertEqual(self.ev(pr([], meta=meta(me * 2, me + web)))["gate-summary"]["conclusion"], "success")
+        self.assertEqual(self.ev(pr([], meta=meta(me * 2, me * 2)))["gate-summary"]["conclusion"], "success")
+        c = self.ev(pr([], meta=meta(me * 2, me + web)))["gate-summary"]   # 网页 Update branch 生成的提交不再放行
+        self.assertEqual(c["conclusion"], "failure"); self.assertIn("第 2 个提交的提交人", c["summary"])
         for bad, where in ((["osaka-work[bot]", "x@users.noreply.github.com"] + me, "第 1 个提交的作者"),
                            (me + ["osaka-gate[bot]", "y@users.noreply.github.com"], "第 1 个提交的提交人"),
                            (web + web, "第 1 个提交的作者"), (["Yarrow", "a@b.c"] + me, "第 1 个提交的作者"), (me, "第 1 个提交的提交人")):
@@ -317,5 +347,345 @@ class Summary(unittest.TestCase):
         self.assertEqual((o["pr"], o["head"], len(o["checks"])), (7, HEAD, 4))
 
 
+class R3Fixes(unittest.TestCase):
+    def test_comment_boundary_removed_in_hunk(self):
+        p = "@@ -1,3 +1,1 @@\n-/*\n run();\n-*/\n"
+        self.assertEqual(gate.count_patch("A.kt", p, PS), 1)
+        big = "@@ -1,603 +1,201 @@\n" + "".join("-/*\n run();\n-*/\n" for _ in range(201))
+        self.assertEqual(gate.count_patch("A.kt", big, PS), 201)
+
+    def test_code_after_block_close(self):
+        self.assertEqual(gate.count_patch("A.kt", "@@ -0,0 +1,2 @@\n+/* note\n+*/ run();\n", PS), 1)
+        self.assertEqual(gate.count_patch("A.kt", "@@ -0,0 +1,2 @@\n+/* note\n+*/ // c\n", PS), 0)
+        self.assertEqual(gate.count_patch("A.kt", "@@ -1,2 +1,2 @@\n /* a\n */\n", PS), 0)   # 上下文没变不计
+
+    def test_secret_env_position(self):
+        base = {"jobs": {"a": {"steps": [{"env": {"REGISTRY": "${{ secrets.REGISTRY }}"}}, {"env": {"REGISTRY": "ghcr.io/x"}}]}}}
+        head = copy.deepcopy(base); head["jobs"]["a"]["steps"][1]["env"]["REGISTRY"] = "ghcr.io/y"
+        e, r = gate.secret_env({".github/workflows/x.yml": {"base": base, "head": head}}, ["(?i)token"])
+        self.assertEqual(r, [])
+        head["jobs"]["a"]["steps"][0]["env"]["REGISTRY"] = "plain"
+        e, r = gate.secret_env({".github/workflows/x.yml": {"base": base, "head": head}}, ["(?i)token"])
+        self.assertEqual(len(r), 1)
+
+    def test_validate_bad_regex(self):
+        d = copy.deepcopy(CI); d["yarrow_classes"]["1_secrets"]["env_name_patterns"] = ["(unclosed"]
+        self.assertTrue(any("正则" in x for x in gate.validate("ci-approval-class.yaml", d)))
+        d["yarrow_classes"]["1_secrets"]["env_name_patterns"] = "x"
+        self.assertTrue(any("字符串列表" in x for x in gate.validate("ci-approval-class.yaml", d)))
+
+
+class R4Fixes(unittest.TestCase):
+    def test_step_insert_not_secret_change(self):
+        st = {"id": "pub", "env": {"NPM_TOKEN": "${{ secrets.NPM }}"}}
+        base = {"runs": {"steps": [st]}}
+        head = {"runs": {"steps": [{"run": "echo hi"}, copy.deepcopy(st)]}}
+        self.assertEqual(gate.secret_env({".github/a/action.yml": {"base": base, "head": head}}, ["(?i)token"])[1], [])
+        named = {"name": "pub", "env": {"NPM_TOKEN": "x"}}
+        b2 = {"steps": [named]}; h2 = {"steps": [{"run": "x"}, copy.deepcopy(named)]}
+        self.assertEqual(gate.secret_env({".github/a.yml": {"base": b2, "head": h2}}, ["(?i)token"])[1], [])
+        h3 = {"steps": [copy.deepcopy(named), copy.deepcopy(named)]}   # 新增第二份相同 env 仍算新增
+        self.assertEqual(len(gate.secret_env({".github/a.yml": {"base": b2, "head": h3}}, ["(?i)token"])[1]), 1)
+
+    def test_copied_uses_new_path_only(self):
+        c, s = gate.pr_size([f("tests/fx.py", "@@ -0,0 +1 @@\n+x = 1\n", status="copied", previous_filename="src/h.py")], PS)
+        self.assertIn("tests/fx.py: 不计入", s)
+
+    def test_bad_class_structure(self):
+        for bad in (None, "x", {"paths": [1]}):
+            d = copy.deepcopy(CI); d["yarrow_classes"]["1_secrets"] = bad
+            self.assertTrue(gate.validate("ci-approval-class.yaml", d), bad)
+        d = copy.deepcopy(CI); d["scope"]["branch_kinds"] = [{"prefix": "x/", "paths": [None]}]
+        self.assertTrue(gate.validate("ci-approval-class.yaml", d))
+        d = copy.deepcopy(CI); d["yarrow_classes"]["1_secrets"] = None   # 消费端不崩
+        c, cls, s = gate.approval_class([f("src/a.py", "@@\n+x\n")], {}, d, PS)
+        self.assertNotEqual(cls, "error")
+
+
+class R5Fixes(unittest.TestCase):
+    def test_full_content_cross_hunk(self):
+        old = "/*\na\nb\nc\nd\ne\nf\ng\nh\n*/\n"
+        new = "a\nb\nc\nd\ne\nf\ng\nh\n"
+        p = "@@ -1,4 +1,3 @@\n-/*\n a\n b\n c\n@@ -7,4 +6,3 @@\n f\n g\n h\n-*/\n"
+        self.assertEqual(gate.count_patch("A.kt", p, PS, {"old": old, "new": new}), 8)   # a~h 全变成代码，含两个 hunk 之间没出现在补丁里的 d、e
+        # 只改块注释里面的一行：新增行在注释里，不计
+        o2 = "x = 1\n/*\n" + "c\n" * 10 + "old\n*/\n"; n2 = "x = 1\n/*\n" + "c\n" * 10 + "new\n*/\n"
+        self.assertEqual(gate.count_patch("A.kt", "@@ -11,3 +11,3 @@\n c\n-old\n+new\n */\n", PS, {"old": o2, "new": n2}), 0)
+        self.assertEqual(gate.count_patch("A.kt", "@@ -11,3 +11,3 @@\n c\n-old\n+new\n */\n", PS), 1)   # 没全文旧做法误计
+
+    def test_full_mismatch_raises_to_failure(self):
+        c = by_name(gate.evaluate(pr([f("A.kt", "@@ -1,1 +1,1 @@\n-a\n+b\n", full={"old": "", "new": ""})]), CFG, GLOB))["pr-size"]
+        self.assertEqual(c["conclusion"], "failure")
+
+    def test_python_docstring_full(self):
+        old = 'def f():\n    """doc\n    x = 1\n    """\n    return 1\n'
+        new = 'def f():\n    """doc\n    x = 2\n    """\n    return 1\n'
+        self.assertEqual(gate.count_patch("a.py", "@@ -3,1 +3,1 @@\n-    x = 1\n+    x = 2\n", PS, {"old": old, "new": new}), 0)
+
+    def test_fingerprint_steps(self):
+        st = {"run": "npm publish", "env": {"NPM_TOKEN": "${{ secrets.NPM }}"}}
+        b = {"steps": [st]}; h = {"steps": [{"run": "echo prep"}, copy.deepcopy(st)]}
+        self.assertEqual(gate.secret_env({".github/a.yml": {"base": b, "head": h}}, ["(?i)token"])[1], [])
+        u = {"uses": "actions/x@v1", "with": {"a": 1}, "env": {"NPM_TOKEN": "${{ secrets.NPM }}"}}
+        self.assertEqual(gate.secret_env({".github/a.yml": {"base": {"steps": [u]}, "head": {"steps": [{"uses": "actions/y@v1"}, copy.deepcopy(u)]}}},
+                                         ["(?i)token"])[1], [])
+        h2 = {"steps": [dict(st, run="npm publish --tag x")]}   # 第六轮：匿名步骤内容变了就算 env 位置变了（偏严）；给步骤加 id 可避免
+        self.assertEqual(len(gate.secret_env({".github/a.yml": {"base": b, "head": h2}}, ["(?i)token"])[1]), 1)
+        h2id = {"steps": [dict(st, id="pub", run="npm publish --tag x")]}
+        b_id = {"steps": [dict(st, id="pub")]}
+        self.assertEqual(gate.secret_env({".github/a.yml": {"base": b_id, "head": h2id}}, ["(?i)token"])[1], [])  # 有 id：只改 run 不算
+        ub = {"steps": [{"uses": "v/publish@v1", "env": {"NPM_TOKEN": "${{ secrets.NPM }}"}}]}
+        uh = {"steps": [{"uses": "v/publish@v2", "env": {"NPM_TOKEN": "${{ secrets.NPM }}"}}]}   # 匿名只升版本：偏严，算
+        self.assertEqual(len(gate.secret_env({".github/a.yml": {"base": ub, "head": uh}}, ["(?i)token"])[1]), 1)
+        h3 = {"steps": [copy.deepcopy(st), copy.deepcopy(st)]}   # 一模一样的两步：第二份算新增
+        self.assertEqual(len(gate.secret_env({".github/a.yml": {"base": b, "head": h3}}, ["(?i)token"])[1]), 1)
+        bare = {"env": {"NPM_TOKEN": "x"}}   # 没 id/name/uses/run 才按位置
+        self.assertEqual(len(gate.secret_env({".github/a.yml": {"base": {"steps": [bare]}, "head": {"steps": [{"run": "y"}, bare]}}},
+                                             ["(?i)token"])[1]), 1)
+
+    def test_approx_counts_additions(self):
+        c, s = gate.pr_size([f("src/a.py", "@@ -1,1 +1,1 @@\n+x\n", patch_approx=True, additions=300)], PS)
+        self.assertEqual(c, "failure"); self.assertIn("无法精确计数", s)
+
+
+class R5bFixes(unittest.TestCase):
+    def test_uncomment_secret_scanned(self):
+        old = "/*\nval k = PRIVATE_KEY\nx\ny\nz\nw\nv\n*/\n"; new = "val k = PRIVATE_KEY\nx\ny\nz\nw\nv\n"
+        p = "@@ -1,2 +1,1 @@\n-/*\n val k = PRIVATE_KEY\n@@ -7,2 +6,1 @@\n v\n-*/\n"
+        c, cls, s = gate.approval_class([f("A.kt", p, full={"old": old, "new": new})], {}, CI, PS)
+        self.assertEqual(cls, "yarrow")
+        c, cls, s = gate.approval_class([f("A.kt", p)], {}, CI, PS)   # 没全文：扫不到（旧行为，留作对照）
+        self.assertEqual(cls, "regular")
+
+    def test_secrets_case_insensitive(self):
+        b = {"steps": [{"run": "x", "env": {}}]}; h = {"steps": [{"run": "x", "env": {"AUTH": "${{ SECRETS.PROD }}"}}]}
+        self.assertEqual(len(gate.secret_env({".github/a.yml": {"base": b, "head": h}}, [])[1]), 1)
+
+    def test_copied_source_not_scoped(self):
+        p = pr([f("tests/fx.py", "@@\n+x\n", status="copied", previous_filename="server/a.py")], head_ref="tests/t1")
+        errs, reasons = gate.scope_check(p, CI)
+        self.assertEqual(errs, [])
+        c, cls, s = gate.approval_class([f("tests/w.yml", "@@\n+x\n", status="copied", previous_filename=".github/workflows/a.yml")], {}, CI, PS)
+        self.assertEqual(cls, "regular")
+
+    def test_kotlin_raw_string_not_comment(self):
+        new = 'val t = """\n/*\n"""\n' + "run()\n" * 201
+        old = 'val t = """\n/*\n"""\n'
+        p = "@@ -3,0 +4,201 @@\n" + "+run()\n" * 201
+        self.assertEqual(gate.count_patch("A.kt", p, PS, {"old": old, "new": new}), 201)
+        pyo = 's = """\n# not comment\n"""\n'
+        self.assertEqual(gate.count_patch("a.py", "@@ -0,0 +1,3 @@\n+s = \"\"\"\n+# not comment\n+\"\"\"\n", PS, {"old": "", "new": pyo}), 3)
+
+
+
+class R6Fixes(unittest.TestCase):
+    """第六轮确认漏洞的回归：来自 r6/verify 复现。"""
+
+    def test_csharp_verbatim_not_comment(self):
+        new = 'string text = @"\n/*\n";\n' + 'System.Console.WriteLine("work");\n' * 201
+        old = 'string text = @"\n/*\n";\n'
+        p = "@@ -3,0 +4,201 @@\n" + '+System.Console.WriteLine("work");\n' * 201
+        self.assertEqual(gate.count_patch("A.cs", p, PS, {"old": old, "new": new}), 201)
+
+    def test_powershell_here_string_not_comment(self):
+        new = '@"\n<#\n"@\n' + 'Write-Host work\n' * 50
+        old = '@"\n<#\n"@\n'
+        p = "@@ -3,0 +4,50 @@\n" + "+Write-Host work\n" * 50
+        self.assertEqual(gate.count_patch("a.ps1", p, PS, {"old": old, "new": new}), 50)
+
+    def test_no_cross_command_cancel(self):
+        b = {"steps": [{"run": "npm publish", "env": {"NPM_TOKEN": "${{ inputs.auth }}"}}]}
+        h = {"steps": [{"run": "./other.sh", "env": {"NPM_TOKEN": "${{ inputs.auth }}"}}]}
+        e, r = gate.secret_env({".github/actions/x/action.yml": {"base": b, "head": h}}, ["(?i)token"])
+        self.assertEqual(len(r), 1)
+
+    def test_summary_paths_redacted(self):
+        nm = "Ha" + "o Yi" + "n"; fn = nm.replace(" ", "_") + ".png"
+        c, s = gate.pr_size([{"filename": fn, "status": "added", "binary": True, "additions": 0, "deletions": 0, "patch": None}], PS)
+        self.assertNotIn(fn, s); self.assertNotIn(nm, s); self.assertIn("不显示", s)
+        c2, cls, s2 = gate.approval_class([{"filename": ".github/workflows/" + fn + ".yml", "status": "modified", "patch": "@@\n+x\n"}], {}, CI, PS)
+        self.assertNotIn(fn, s2); self.assertNotIn(nm, s2)
+        e, r = gate.secret_env({".github/workflows/" + fn + ".yml": {"error": "YAML 解析失败"}}, [])
+        self.assertTrue(all(fn not in x and nm not in x for x in e + r))
+        # evaluate 出站脱敏
+        from copy import deepcopy
+        files = [{"filename": fn, "status": "added", "binary": True, "additions": 0, "deletions": 0, "patch": None}]
+        p = pr(files); p["meta"]["title"] = "t"
+        checks = by_name(gate.evaluate(p, CFG, GLOB))
+        for c in checks.values():
+            self.assertNotIn(nm, c["summary"]); self.assertNotIn(fn, c["summary"])
+            self.assertNotIn(nm, c["title"])
+
+    def test_log_interpolation_counts(self):
+        self.assertFalse(gate.is_log_line('logger.info(f"{do_work()}")', ["logger.info"]))
+        self.assertFalse(gate.is_log_line('Log.d(TAG, "${run()}")', ["Log.d"]))
+        self.assertTrue(gate.is_log_line('logger.info("plain")', ["logger.info"]))
+        self.assertTrue(gate.is_log_line('logger.info(f"x={y}")', ["logger.info"]))  # 插值无调用
+        p = "@@ -0,0 +1,201 @@\n" + '+logger.info(f"{do_work()}")\n' * 201
+        self.assertEqual(gate.count_patch("a.py", p, PS), 201)
+
+    def test_private_key_case_insensitive(self):
+        for src in ("private_key = 'x'", "PrivateKey = 'x'", "PRIVATE_KEY = 'x'", "osaka_work_key = 'x'", "OSAKA-WORK-KEY = 'x'"):
+            c, cls, s = gate.approval_class([{"filename": "src/a.py", "status": "modified", "patch": "@@\n+" + src + "\n"}], {}, CI, PS)
+            self.assertEqual(cls, "yarrow", src)
+
+
+
+
+class R7Fixes(unittest.TestCase):
+    def test_nested_fstring_log_counts(self):
+        line = 'logger.info(f"{update({\'enabled\': True})}")'
+        self.assertFalse(gate.is_log_line(line, ["logger.info"]))
+        p = "@@ -0,0 +1,201 @@\n" + ("+" + line + "\n") * 201
+        self.assertEqual(gate.count_patch("a.py", p, PS), 201)
+        self.assertTrue(gate.is_log_line('logger.info(f"x={y}")', ["logger.info"]))
+
+    def test_docstring_same_line_code_counts(self):
+        line = '"""note"""; update()'
+        p = "@@ -0,0 +1,201 @@\n" + ("+" + line + "\n") * 201
+        self.assertEqual(gate.count_patch("a.py", p, PS), 201)
+        self.assertEqual(gate.count_patch("a.py", p, PS, {"old": "", "new": (line + "\n") * 201}), 201)
+        self.assertEqual(gate.count_patch("a.py", '@@ -0,0 +1,1 @@\n+"""only docstring"""\n', PS), 0)
+
+    def test_validate_no_secret_echo(self):
+        errs = gate.validate("key-acceptance-tests.yaml",
+                             {"tests": [{"id": "t1", "entry": "x", "job": "j", "paths": "bad",
+                                         "env": {"API_TOKEN": "sk_live_SECRETVALUE123"}}]})
+        self.assertTrue(errs)
+        blob = "\n".join(errs)
+        self.assertNotIn("sk_live_SECRETVALUE123", blob)
+        self.assertNotIn("API_TOKEN", blob)
+        errs2 = gate.validate("required-checks.yaml",
+                              {"branch_protection": [{"context": "x", "expected_source": {"app_id": "bad"},
+                                                      "TOKEN": "sk_live_XYZ"}],
+                               "gate_verified": [], "strict": True})
+        self.assertTrue(errs2)
+        self.assertNotIn("sk_live_XYZ", "\n".join(errs2))
+
+
+
+
+class Lint(unittest.TestCase):
+    def gs(self, p):
+        return by_name(gate.evaluate(p, CFG, GLOB))["gate-summary"]
+
+    def test_branch_names(self):
+        for ok in ("server/server-core-1", "android/vpn.ui-12", "server/vpn_Core-2", "ci/cache-3", "ci/build_cache-1", "lead/x", "tests/t1", "bookkeeping/b-2"):
+            self.assertEqual(gate.lint(pr([f("src/a.py", "@@\n+x = 1\n")], head_ref=ok), CI), [], ok)
+        for bad in ("server/core", "Server/core-1", "feature/x-1", "ci/cache", "lead/", "server/a/b-1", "lead/a/b", "mac/x-1", "server/-1", "", None):
+            r = gate.lint(pr([f("src/a.py", "@@\n+x = 1\n")], head_ref=bad), CI)
+            self.assertTrue(any("分支命名" in x for x in r), bad)
+        c = self.gs(pr([f("src/a.py", "@@\n+x = 1\n")], head_ref="feature/x-1"))
+        self.assertEqual(c["conclusion"], "failure"); self.assertIn("lint: 分支命名", c["summary"])
+
+    def test_bookkeeping_mix(self):
+        mix = pr([f("src/a.py", "@@\n+x = 1\n"), f("notes/n.md", "@@\n+a\n")])
+        self.assertTrue(any("记账" in x for x in gate.lint(mix, CI)))
+        self.assertEqual(gate.lint(pr([f("board.json", "@@\n+{}\n"), f("memory/m.md", "@@\n+a\n")], head_ref="bookkeeping/b"), CI), [])
+        mv = pr([f("src/n.md", "@@\n", previous_filename="notes/n.md")])   # 从记账目录搬出也算混
+        self.assertTrue(any("记账" in x for x in gate.lint(mv, CI)))
+        self.assertEqual(gate.lint(pr([f("notesx/a.py", "@@\n+x\n"), f("src/b.py", "@@\n+y\n")]), CI), [])   # 前缀按目录算
+
+    def test_lint_cfg_missing(self):
+        ci = copy.deepcopy(CI); del ci["scope"]["bookkeeping_paths"]
+        self.assertTrue(gate.lint(pr([]), ci))
+
+    def test_breakdown(self):
+        files = [f("src/a.py", "@@\n+x\n", additions=400, deletions=50), f("tests/t.py", "@@\n+y\n", additions=200, deletions=0)]
+        ps = dict(PS, breakdown_over=600, breakdown_categories=[{"name": "测试", "paths": ["tests/**"]}])
+        _, s = gate.pr_size(files, ps)
+        self.assertIn("总改动 650 行", s); self.assertIn("运行代码和配置: +400 -50", s); self.assertIn("测试: +200 -0", s)
+        files[0]["deletions"] = 0
+        self.assertNotIn("总改动", gate.pr_size(files, ps)[1])    # 刚好 600 不输出
+        self.assertNotIn("总改动", gate.pr_size(files, PS)[1])    # 没配置不输出
+
+    def test_validate_lint_cfg(self):
+        self.assertTrue(any("branch_name_patterns" in e for e in gate.validate("ci-approval-class.yaml",
+                        {"scope": {"branch_kinds": []}, "yarrow_classes": {"6_protected_config": {"paths": ["x"]}}})))
+        self.assertTrue(gate.validate("pr-size.yaml", {"threshold": 1, "breakdown_over": "600"}))
+
+    def test_breakdown_error_does_not_block(self):
+        files = [f("src/a.py", "@@\n+x\n", additions="x", deletions=700)]
+        c, s = gate.pr_size(files, dict(PS, breakdown_over=600, breakdown_categories=[]))
+        self.assertEqual(c, "success"); self.assertIn("分类行数算不出", s)
+        self.assertTrue(gate.validate("pr-size.yaml", {"threshold": 1, "breakdown_categories": [{"name": "a", "paths": [1]}]}))
+
+    def test_bookkeeping_mix_ok_for_tests_ci(self):
+        files = [f("tests/a.py", "@@\n+x\n"), f("board.json", "@@\n+{}\n")]
+        for ok in ("tests/t1", "ci/cache-3"):
+            self.assertEqual(gate.lint(pr(files, head_ref=ok), CI), [], ok)
+        for bad in ("server/server-core-1", "lead/x", "android/a-1"):
+            self.assertTrue(any("记账" in x for x in gate.lint(pr(files, head_ref=bad), CI)), bad)
+        ci = copy.deepcopy(CI); del ci["scope"]["bookkeeping_mix_ok_prefixes"]   # 没配就不放行
+        self.assertTrue(any("记账" in x for x in gate.lint(pr(files, head_ref="tests/t1"), ci)))
+        d = copy.deepcopy(CI); d["scope"]["bookkeeping_mix_ok_prefixes"] = ["tests"]
+        self.assertTrue(any("mix_ok" in e for e in gate.validate("ci-approval-class.yaml", d)))
+
+    def test_copied_into_notes_not_mix(self):
+        p = pr([f("notes/n.md", "@@\n+a\n", status="copied", previous_filename="src/t.md")], head_ref="bookkeeping/b")
+        self.assertEqual(gate.lint(p, CI), [])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecretsEnv(unittest.TestCase):
+    PATS = ["(?i)(secret|token|passw(or)?d|api[_-]?key|private[_-]?key|credential)"]
+    CI2 = copy.deepcopy(CI)
+    CI2["yarrow_classes"]["1_secrets"]["env_name_patterns"] = PATS
+
+    def cls(self, base, head, name=".github/actions/a/action.yml"):
+        return gate.approval_class([f(name, "@@\n+x\n")], {}, self.CI2, PS, gh_yaml={name: {"base": base, "head": head}})
+
+    def test_env_secret_names_escalate(self):
+        job = lambda env: {"runs": {"steps": [{"run": "x", "env": env}]}}
+        for env in ({"CLIENT_SECRET": "abc"}, {"API_KEY": "${{ vars.X }}"}, {"db_password": "x"}, {"X": "${{ secrets.Y }}"}):
+            c, cls, s = self.cls(job({}), job(env))
+            self.assertEqual(cls, "yarrow", env); self.assertIn("1_secrets", s); self.assertNotIn("abc", s)
+        c, cls, s = self.cls(job({"NPM_TOKEN": "a"}), job({"NPM_TOKEN": "b"}))   # 只改值也算
+        self.assertEqual(cls, "yarrow")
+        c, cls, s = self.cls(job({"NPM_TOKEN": "a"}), None)                       # 删掉也算
+        self.assertEqual(cls, "yarrow")
+
+    def test_env_plain_and_inputs_regular(self):
+        c, cls, s = self.cls({"env": {"NODE_VERSION": "18"}}, {"env": {"NODE_VERSION": "20"}})
+        self.assertEqual(cls, "regular")
+        c, cls, s = self.cls({"inputs": {}}, {"inputs": {"token": {"required": True}}, "runs": {"steps": [{"with": {"token": "x"}}]}})
+        self.assertEqual(cls, "regular")   # inputs:/with: 里的 token 不按 env 判
+
+    def test_parse_error_red(self):
+        c, cls, s = gate.approval_class([f(".github/actions/a/action.yml", "@@\n+x\n")], {}, self.CI2, PS,
+                                        gh_yaml={".github/actions/a/action.yml": {"error": "bad"}})
+        self.assertEqual(c, "failure")
+
+
+class CommentEdge(unittest.TestCase):
+    def test_block_comment_with_trailing_code_counts(self):
+        p = "@@ -1 +1,2 @@\n+/* note */ run();\n+/* only */\n"
+        self.assertEqual(gate.count_patch("A.kt", p, PS), 1)
+
+
+class R2Fixes(unittest.TestCase):
+    PATS = ["(?i)(secret|token|passw(or)?d|api[_-]?key|private[_-]?key|credential)", "(?i)(^|[_-])key($|[_-])"]
+    CI2 = copy.deepcopy(CI)
+    CI2["yarrow_classes"]["1_secrets"]["env_name_patterns"] = PATS
+
+    def cls(self, base, head, name=".github/actions/a/action.yml"):
+        return gate.approval_class([f(name, "@@\n+x\n")], {}, self.CI2, PS, gh_yaml={name: {"base": base, "head": head}})[1]
+
+    def test_copy_env_to_second_step(self):
+        st = lambda: {"run": "x", "env": {"NPM_TOKEN": "${{ inputs.auth }}"}}
+        self.assertEqual(self.cls({"runs": {"steps": [st()]}}, {"runs": {"steps": [st(), st()]}}), "yarrow")
+
+    def test_generic_key(self):
+        for k in ("SIGNING_KEY", "DEPLOY_KEY", "SSH_KEY"):
+            self.assertEqual(self.cls({"env": {}}, {"env": {k: "${{ vars.X }}"}}), "yarrow", k)
+        self.assertEqual(self.cls({"env": {}}, {"env": {"MONKEY_MODE": "1"}}), "regular")
+
+    def test_plusplus_lines_scanned(self):
+        nm = "Ha" + "o Yi" + "n"
+        files = [f("src/a.cs", "@@ -1 +1,2 @@\n x\n+++i; // " + nm + "\n")]
+        self.assertIn("新增行", "；".join(gate.realname(pr(files))))
+        c, cls, s = gate.approval_class([f("src/a.cs", "@@ -1 +1 @@\n+++i; Use(PRIVATE_KEY);\n")], {}, CI, PS)
+        self.assertEqual(cls, "yarrow")

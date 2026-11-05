@@ -8,7 +8,10 @@
 yarrow_classes:
   "1_secrets":
     paths: []
-    diff_patterns: ['secrets\s*[.\[]', 'toJSON\s*\(\s*secrets', 'secrets:\s*inherit', 'OSAKA_[A-Z_]*KEY', 'PRIVATE_KEY']
+    diff_patterns: ['(?i)secrets\s*[.\[]', '(?i)toJSON\s*\(\s*secrets', '(?i)secrets:\s*inherit', '(?i)osaka[_-]?[a-z0-9_]*[_-]?key', '(?i)private[_-]?key']
+    # .github/ 下 YAML（workflow、本地 action）整份解析后，env 映射里新增、删除或改动的变量名命中下面任一条，
+    # 或值里引用 secrets，就进 Yarrow 档（只看 env 下的键，不看 inputs:、with: 里的同名参数）
+    env_name_patterns: ['(?i)(secret|token|passw(or)?d|api[_-]?key|private[_-]?key|credential)', '(?i)(^|[_-])key($|[_-])']
   "2_permissions":
     paths:
       - "policy-repo:.github/workflows/**"       # 前缀 policy-repo: 表示策略仓库内的路径；业务仓库 workflow 整目录见第 6 类
@@ -62,6 +65,15 @@ scope:
     - {prefix: "bookkeeping/", paths: ["board.json", "notes/", "reports/", "memory/"]}
   board_task_keys: ["version", "updated_at", "processed_events", "prs", "tasks", "decisions_log"]
   board_module_keys: ["id", "branch", "paths"]
+  # 分支命名（组长规则【版本管理】）：端分支 <端>/<模块>-<序号>，CI 分支 ci/<内容>-<序号>；lead/、tests/、bookkeeping/ 只要求前缀加一段名字；模块段不限字符（Git 自己管合法性），只不许再带 /
+  branch_name_patterns:
+    - '^(server|android|windows)/[^/]+-[0-9]+$'
+    - '^ci/[^/]+-[0-9]+$'
+    - '^(lead|tests|bookkeeping)/[^/]+$'
+  # 记账文件不许夹在功能 PR 里：PR 里同时有这些路径和别的路径就拦（改名看新旧两端）
+  bookkeeping_paths: ["board.json", "notes/", "memory/", "reports/"]
+  # 这些分支的 PR 可以顺带改记账文件（Yarrow 定，2026-11-05）；其他分支仍不许混
+  bookkeeping_mix_ok_prefixes: ["tests/", "ci/"]
 proposal_paths:
   - "policy-proposals/required-checks.yaml"
   - "policy-proposals/key-acceptance-tests.yaml"

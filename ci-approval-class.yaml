@@ -37,7 +37,7 @@ yarrow_classes:
       - {file: "pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
       - {file: "policy-proposals/pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
   "6_protected_config":   # 按路径一律进 Yarrow 档，不看关键词、不看分支名（没有 lead/setup-* 例外）；删除、改名也算
-    paths: [".codex/**", ".claude/**", ".github/workflows/**", "scripts/check-*.sh"]
+    paths: ["AGENTS.md", "CLAUDE.md", ".codex/**", ".claude/**", ".github/workflows/**", "scripts/check-*.sh"]
   "7_board_scope":        # board.json 的权限部分变了才进 Yarrow 档：scope、modules 的 board_module_keys、board_task_keys 以外的顶层键
     paths: []
   "5_loosen_gate":

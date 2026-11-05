@@ -15,6 +15,12 @@
  ],
  "paused": null,
  "processed_through": "20083b9ed8b29b752f5e3d5ef20b10db600f5c2e",
- "proposals": {},
+ "proposals": {
+  "71": {
+   "merge": "48c1e2e84a16b7b8462d2e12240cbe7b68faf828",
+   "reason": "PR #71 head 上最新的 gate-summary 不是 success",
+   "result": "failed"
+  }
+ },
  "schema": 1
 }

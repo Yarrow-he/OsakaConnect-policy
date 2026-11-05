@@ -9,6 +9,14 @@ BIZ = "Yarrow-he/OsakaConnect"
 POL = "Yarrow-he/OsakaConnect-policy"
 GATE_APP = 5592067
 OWNER = "Yarrow-he"
+# t473：团队数字 user id（Yarrow-he + 4 个 App 的 bot 账号）。只处理本仓库来源、团队作者的 PR 与评论。
+TEAM_IDS = {318895665, 351869372}   # Yarrow-he、osaka-work[bot]（API 实测）；lead/gate 只写 check 不写 PR，暂不需要
+
+def team_pr(p):
+    return bool(p.get("head", {}).get("repo")) and p["head"]["repo"].get("full_name") == BIZ and (p.get("user") or {}).get("id") in TEAM_IDS
+
+def team_obj(o):
+    return (o.get("user") or {}).get("id") in TEAM_IDS
 OWN_CHECKS = ("pr-size", "ci-approval-class", "owner-approval", "gate-summary")
 NEVER_REMOVE = ("gate-summary", "lead-merge-approved")
 # 发布映射写死在这里（不读可被提案改的配置）：policy-proposals/<X> -> 策略仓库 <X>
@@ -139,6 +147,8 @@ def fetch(policy_dir, ind, fetchd):
     os.makedirs(fetchd, exist_ok=True)
     listed = []
     for p in pages(f"repos/{BIZ}/pulls?state=open&base=main", tok):
+        if not team_pr(p):
+            print(f"PR #{p['number']}: 非本仓库团队来源，跳过（不写任何 check）"); continue
         n, head, base = p["number"], p["head"]["sha"], p["base"]["sha"]
         d = {"pr": n, "head": head, "head_ref": p["head"]["ref"], "base_ref": p["base"]["ref"], "main_board": main_board}
         listed.append({"pr": n, "head": head})
@@ -175,9 +185,10 @@ def pr_meta(n, p, tok):
                                                          c["commit"]["committer"]["name"], c["commit"]["committer"]["email"]]}
           for c in pages(f"repos/{BIZ}/pulls/{n}/commits", tok, limit=3)]
     # PR 评论：对话评论、逐行审查评论、审查意见正文（真名检查用；只传文字，不传作者）
-    com = [c.get("body") or "" for c in pages(f"repos/{BIZ}/issues/{n}/comments", tok)]
-    com += [c.get("body") or "" for c in pages(f"repos/{BIZ}/pulls/{n}/comments", tok)]
-    com += [r.get("body") or "" for r in pages(f"repos/{BIZ}/pulls/{n}/reviews", tok)]
+    # t473：先按团队作者过滤再拼接，外部评论不影响内部 PR 结果
+    com = [c.get("body") or "" for c in pages(f"repos/{BIZ}/issues/{n}/comments", tok) if team_obj(c)]
+    com += [c.get("body") or "" for c in pages(f"repos/{BIZ}/pulls/{n}/comments", tok) if team_obj(c)]
+    com += [r.get("body") or "" for r in pages(f"repos/{BIZ}/pulls/{n}/reviews", tok) if team_obj(r)]
     return {"title": p.get("title") or "", "body": p.get("body") or "", "commits": cs, "comments": [x for x in com if x]}
 
 
@@ -509,7 +520,11 @@ def publish():
         if len(parents) != 2:
             raise Reject(f"{m[:10]} 不是合并提交（只接受两个父提交的合并）")
         p1, p2 = parents
-        prs = [p for p in api("GET", f"repos/{BIZ}/commits/{m}/pulls", "BIZ_TOKEN") if p.get("merge_commit_sha") == m]
+        allp = api("GET", f"repos/{BIZ}/commits/{m}/pulls", "BIZ_TOKEN")
+        bad = [p["number"] for p in allp if not team_pr(p)]
+        if bad:   # t473：关联 PR 任一非本仓库/非团队 → fail-closed 不发布
+            raise Reject(f"{m[:10]} 关联非团队来源 PR {bad}，不发布")
+        prs = [p for p in allp if p.get("merge_commit_sha") == m]
         if len(prs) != 1:
             raise Reject(f"{m[:10]} 找不到对应 PR")
         n = prs[0]["number"]

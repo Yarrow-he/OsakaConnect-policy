@@ -3,7 +3,7 @@
 放在 .github/workflows/ 下，和 workflow 一样只能由 Yarrow 临时管理员放行推送；不读、不跑任何 PR 代码。
 令牌只从环境变量读，不打印。用法见各 workflow。
 """
-import base64, json, os, re, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import base64, json, urllib.parse, os, re, subprocess, sys, tempfile, time, urllib.error, urllib.request
 
 BIZ = "Yarrow-he/OsakaConnect"
 POL = "Yarrow-he/OsakaConnect-policy"
@@ -67,7 +67,7 @@ def pages(path, tok, key=None, limit=20):
 def yaml_json(text):
     r = subprocess.run(["yq", "-o=json", "."], input=text, capture_output=True, text=True, timeout=30)
     if r.returncode:
-        raise ValueError(r.stderr.strip()[:300])
+        raise ValueError("YAML 解析失败（出错内容不回显，防止带出密钥）")
     return json.loads(r.stdout) if r.stdout.strip() else None
 
 
@@ -174,7 +174,117 @@ def pr_meta(n, p, tok):
     cs = [{"message": c["commit"]["message"], "names": [c["commit"]["author"]["name"], c["commit"]["author"]["email"],
                                                          c["commit"]["committer"]["name"], c["commit"]["committer"]["email"]]}
           for c in pages(f"repos/{BIZ}/pulls/{n}/commits", tok, limit=3)]
-    return {"title": p.get("title") or "", "body": p.get("body") or "", "commits": cs}
+    # PR 评论：对话评论、逐行审查评论、审查意见正文（真名检查用；只传文字，不传作者）
+    com = [c.get("body") or "" for c in pages(f"repos/{BIZ}/issues/{n}/comments", tok)]
+    com += [c.get("body") or "" for c in pages(f"repos/{BIZ}/pulls/{n}/comments", tok)]
+    com += [r.get("body") or "" for r in pages(f"repos/{BIZ}/pulls/{n}/reviews", tok)]
+    return {"title": p.get("title") or "", "body": p.get("body") or "", "commits": cs, "comments": [x for x in com if x]}
+
+
+SYNTH_MAX = 10_000_000   # 精确补丁的单侧上限（字节）；超过就改做近似补丁（见 synth_patch）
+SCAN_MAX = 100_000_000   # 能取到并扫描的单侧上限（GitHub raw 内容接口上限 100MB）；超过才判数据不全
+FULL_MAX = SYNTH_MAX     # 带回两侧全文给 pr-size 算跨 hunk 注释状态的单侧上限（第五轮评审：和精确补丁同限，不留 hunk 局部的缺口）
+BLOCK_EXT = (".py", ".kt", ".kts", ".cs", ".ps1")   # 有块注释或 docstring 的语言（和 gate.py 的 LANG 对应）；只有这些要带全文
+
+
+def synth_patch(f, mb, head, tok, want_full=False, need=True, cfg=None):
+    """按 merge-base 和 head 两边的文件内容在本地算 patch，并按需带回两侧全文。返回 (patch, approx, full)。
+    该存在的一侧取不到（None）就抛 ValueError（不当成空文件）；空字符串是合法空文件。
+    copied 按新增处理（旧侧为空）。
+    第五轮：两侧都不超过 SYNTH_MAX 用 git diff 算精确补丁；超过 SYNTH_MAX、不超过 SCAN_MAX 时不算精确 diff，
+    改按行多重集合做“近似补丁”（新侧多出来的行记 +，旧侧多出来的行记 -，线性时间），真名和密钥扫描照样扫到每一条
+    新增/删除内容，pr-size 对近似补丁按 GitHub 给的新增行数计（偏严，排除名单内的不计）。超过 SCAN_MAX 才判数据不全。"""
+    old_path = f.get("previous_filename") or f["filename"]
+    q = lambda x: urllib.parse.quote(x, safe="/")
+    old = new = ""
+    if f["status"] not in ("added", "copied"):
+        old = api("GET", f"repos/{BIZ}/contents/{q(old_path)}?ref={mb}", tok, raw=True, ok404=True)
+    if f["status"] != "removed":
+        new = api("GET", f"repos/{BIZ}/contents/{q(f['filename'])}?ref={head}", tok, raw=True, ok404=True)
+    if old is None or new is None:
+        raise ValueError(f"{f['filename']} 取不到{'旧' if old is None else '新'}版内容")
+    if len(old) > SCAN_MAX or len(new) > SCAN_MAX:
+        if not need:
+            return None, False, None
+        raise ValueError(f"{f['filename']} 超过 {SCAN_MAX} 字节，取不到完整内容做扫描")
+    if len(old) > SYNTH_MAX or len(new) > SYNTH_MAX:
+        if not need:
+            return None, False, None
+        return approx_patch(_lines(old), _lines(new)), True, {"hits": scan_hits(old, new, cfg)}
+    full = {"old": old, "new": new} if want_full and len(old) <= FULL_MAX and len(new) <= FULL_MAX else None
+    if not need:
+        return None, False, full   # 只要全文，补丁 compare 已给
+    return make_patch(_lines(old), _lines(new)), False, full
+
+
+def _lines(t):
+    """只按 \n 分行（和 git、GitHub 补丁一致；splitlines 会在 \x0c、U+2028 等处多分）。"""
+    ls = t.split("\n")
+    if ls and ls[-1] == "":
+        ls.pop()
+    return ls
+
+
+def scan_hits(old, new, cfg):
+    """大文件（近似补丁）用：多重集合差看不到“挪了位置的密钥引用”，所以对两侧全文跑 1_secrets 的 diff_patterns，
+    任一侧命中就记类名（保守：大文件里只要有密钥引用就进 Yarrow 档）。只用配置里的正则（数据），不执行策略代码。只回类名和正则。"""
+    yc = ((cfg or {}).get("ci_class") or {}).get("yarrow_classes") or {}
+    out = []
+    for pat in (yc.get("1_secrets") or {}).get("diff_patterns") or []:
+        try:
+            if re.search(pat, old) or re.search(pat, new):
+                out.append(pat)
+        except re.error:
+            out.append(pat)   # 坏正则：保守算命中
+    return out
+
+
+def approx_patch(a, b):
+    """大文件用：按行多重集合求差。不是最小 diff（挪动的行不算改动），但每条新出现的内容都在 + 行里、
+    每条消失的内容都在 - 行里，够真名和密钥扫描用。"""
+    from collections import Counter
+    ca, cb = Counter(a), Counter(b)
+    plus, minus = [], []
+    left = dict(ca)
+    for x in b:
+        if left.get(x, 0) > 0:
+            left[x] -= 1
+        else:
+            plus.append(x)
+    left = dict(cb)
+    for x in a:
+        if left.get(x, 0) > 0:
+            left[x] -= 1
+        else:
+            minus.append(x)
+    if not plus and not minus:
+        return ""
+    return "\n".join([f"@@ -1,{len(a)} +1,{len(b)} @@"] + ["-" + x for x in minus] + ["+" + x for x in plus])
+
+
+PATCH_TIMEOUT = 60   # 补一个文件补丁的时间上限（秒）；超时判数据不全，不拖住整轮取数
+
+
+def make_patch(a, b, n=3):
+    """unified diff 的 hunk 部分（不含文件头）。第三轮改用 git diff --no-index（Myers），避免 difflib 关掉 autojunk 后
+    重复行多时平方级变慢；子进程带超时；不读全局/系统 git 配置，关掉外部 diff 和 textconv。"""
+    with tempfile.TemporaryDirectory() as d:
+        pa, pb = os.path.join(d, "a"), os.path.join(d, "b")
+        for pth, ls in ((pa, a), (pb, b)):
+            with open(pth, "w", encoding="utf-8", newline="") as fh:
+                fh.write("\n".join(ls) + ("\n" if ls else ""))
+        env = {"PATH": "/usr/bin:/bin", "HOME": d, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "LC_ALL": "C.UTF-8"}
+        try:
+            r = subprocess.run(["git", "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--text",
+                                "--diff-algorithm=myers", f"-U{n}", "--", pa, pb],
+                               capture_output=True, timeout=PATCH_TIMEOUT, env=env, cwd=d)
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"补补丁超过 {PATCH_TIMEOUT} 秒")
+        if r.returncode not in (0, 1):
+            raise ValueError("git diff 补补丁失败")
+    lines = r.stdout.decode("utf-8").split("\n")
+    i = next((k for k, x in enumerate(lines) if x.startswith("@@")), len(lines))
+    return "\n".join(x for x in lines[i:] if x and not x.startswith("\\"))
 
 
 def pr_data(n, head, base, tok, cfg):
@@ -187,7 +297,30 @@ def pr_data(n, head, base, tok, cfg):
         changes = f.get("additions", 0) + f.get("deletions", 0)
         files.append({"filename": f["filename"], "status": f["status"], "previous_filename": f.get("previous_filename"),
                       "patch": f.get("patch"), "additions": f.get("additions", 0), "deletions": f.get("deletions", 0),
-                      "binary": "patch" not in f and changes == 0 and f["status"] != "renamed"})
+                      "binary": "patch" not in f and changes == 0 and f["status"] not in ("renamed", "copied")})
+    for x in files:
+        # copied 不管 compare 给没给补丁，都按“旧侧为空、新文件全文”重补（第五轮评审：否则复制后改一行只算一行、未改行不扫）
+        need = not x["binary"] and (x["status"] == "copied" or (x["patch"] is None and x["additions"] + x["deletions"] > 0))
+        # 第五轮：有块注释/docstring 的源码，就算 compare 给了补丁也取两侧全文，供跨 hunk 注释判断
+        want_full = not x["binary"] and x["status"] in ("modified", "renamed") and x["filename"].endswith(BLOCK_EXT)
+        if need or want_full:
+            try:
+                # 第四轮：不再 import 策略里的 gate.py（取数进程持令牌，不执行计数器代码）
+                p, approx, full = synth_patch(x, mb, head, tok, want_full, need, cfg)
+                if need:
+                    x["patch"], x["patch_synth"], x["patch_approx"] = p, True, approx
+                if approx:
+                    x["approx_hits"] = (full or {}).get("hits") or []
+                elif full is not None:
+                    x["full"] = full
+            except UnicodeDecodeError:   # 有增删行数却不是 UTF-8：不能当二进制按 1 行放过
+                if not need:
+                    continue   # 只是为了取全文：取不成就退回 hunk 局部判断，补丁本身 compare 已给
+                if x["status"] == "copied" and x["additions"] + x["deletions"] == 0:
+                    x["binary"] = True; continue   # 复制的二进制文件（GitHub 报零增删）按二进制计
+                return {"incomplete": "有文件不是 UTF-8 文本，补不出补丁（文件名不回显）"}
+            except (ValueError, urllib.error.HTTPError) as e:
+                return {"incomplete": "补丁缺失且补不出来（详情不回显，防文件名/路径泄露）"}
     reviews = [{"user": (r.get("user") or {}).get("login"), "state": r["state"], "commit_id": r.get("commit_id")}
                for r in pages(f"repos/{BIZ}/pulls/{n}/reviews", tok)]
     # 只按名字取要核的外部检查（n7impl1 A①：闸口自己每轮写的检查会累积，不能整列 filter=all）
@@ -218,12 +351,30 @@ def pr_data(n, head, base, tok, cfg):
                 except ValueError as e:
                     v = {"error": str(e)}
                 yamls[path] = v
+    gh_yaml = {}   # .github/ 下改动的 YAML：两边整份解析，给 1_secrets 的 env 检查用
+    for f in files:
+        for path, ref in ((f.get("previous_filename") or f["filename"], mb), (f["filename"], head)):
+            if path.startswith(".github/") and re.search(r"\.ya?ml$", path):
+                v = gh_yaml.setdefault(f["filename"], {})
+                side = "base" if ref == mb else "head"
+                if (side == "base" and f["status"] in ("added", "copied")) or (side == "head" and f["status"] == "removed"):
+                    v[side] = None; continue
+                try:
+                    t = api("GET", f"repos/{BIZ}/contents/{urllib.parse.quote(path, safe='/')}?ref={ref}", tok, raw=True, ok404=True)
+                    if t is None:
+                        v["error"] = f"取不到 {side} 版"
+                    else:
+                        v[side] = yaml_json(t)
+                except (ValueError, UnicodeDecodeError):
+                    v["error"] = f"{side} 版 YAML 解析失败"   # 不回显异常文本（可能带出错行里的密钥）
+                except urllib.error.HTTPError as e:
+                    v["error"] = f"取 {side} 版失败（HTTP {e.code}）"
     board_change = None
     if any("board.json" in (f["filename"], f.get("previous_filename")) for f in files):
         b, h = board_at(mb, tok), board_at(head, tok)
         board_change = {"error": "解析失败"} if any(isinstance(x, dict) and set(x) == {"error"} for x in (b, h)) else {"base": b, "head": h}
     return {"merge_base": mb, "files": files, "board_change": board_change, "reviews": reviews, "check_runs": runs, "check_names": names, "head_paths": head_paths,
-            "ci_jobs": ci_jobs, "proposal_yaml": yamls}
+            "ci_jobs": ci_jobs, "proposal_yaml": yamls, "github_yaml": gh_yaml}
 
 
 def write(outd, fetch_json):

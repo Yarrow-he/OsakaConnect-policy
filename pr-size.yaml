@@ -30,6 +30,15 @@ scaffold_temp:
   - "policy-proposals/scripts/gate.py"
   - "policy-proposals/scripts/test_gate.py"
   - ".github/workflows/policy-selftest.yml"
+# PR 总改动（新增+删除，不论计不计入）超过这个数时，pr-size 输出里自动列分类行数（只输出，不拦）
+breakdown_over: 600
+# 分类：按顺序取第一个命中的类别；都不命中算“运行代码和配置”
+breakdown_categories:
+  - {name: "测试", paths: ["tests/**", "android/**/src/test/**", "android/**/src/androidTest/**", "shared/test-vectors/**"]}
+  - {name: "记账", paths: ["board.json", "notes/**", "memory/**", "reports/**"]}
+  - {name: "文档和决策记录", paths: ["README.md", "**/*.md", "docs/**", "LICENSE", "decisions/**"]}
+  - {name: "锁文件和生成文件", paths: ["**/packages.lock.json"]}
+  - {name: "策略提案配置", paths: ["policy-proposals/*.yaml"]}
 # 日志函数名单：只含一条独立日志调用、参数里无函数调用或赋值的行不计。
 log_functions:
   python: ["logger.debug", "logger.info", "logger.warning", "logger.error", "logging.info", "logging.debug", "logging.warning", "logging.error"]

@@ -14,7 +14,7 @@ yarrow_classes:
     env_name_patterns: ['(?i)(secret|token|passw(or)?d|api[_-]?key|private[_-]?key|credential)', '(?i)(^|[_-])key($|[_-])']
   "2_permissions":
     paths:
-      - "policy-repo:.github/workflows/**"       # 前缀 policy-repo: 表示策略仓库内的路径；业务仓库 workflow 整目录见第 6 类
+      - "policy-repo:.github/workflows/**"       # 前缀 policy-repo: 表示策略仓库内的路径；业务仓库 workflow 按第 1/2 类关键词判，不整目录进第 6 类
       - "policy-repo:scripts/**"                 # 策略仓库里的检查器脚本
       - ".github/workflows/policy-selftest.yml"  # 业务仓库里跑候选检查器的自测 workflow
       - "policy-proposals/scripts/**"            # 所有检查器脚本（含依赖）：改它就能让检查恒过，一律算权限类
@@ -37,7 +37,7 @@ yarrow_classes:
       - {file: "pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
       - {file: "policy-proposals/pr-size.yaml", keys: [threshold, exclude_paths, scaffold_temp, log_functions]}
   "6_protected_config":   # 按路径一律进 Yarrow 档，不看关键词、不看分支名（没有 lead/setup-* 例外）；删除、改名也算
-    paths: ["AGENTS.md", "CLAUDE.md", ".codex/**", ".claude/**", ".github/workflows/**", "scripts/check-*.sh"]
+    paths: ["AGENTS.md", "CLAUDE.md", ".codex/**", ".claude/**", "scripts/check-*.sh"]
   "7_board_scope":        # board.json 的权限部分变了才进 Yarrow 档：scope、modules 的 board_module_keys、board_task_keys 以外的顶层键
     paths: []
   "5_loosen_gate":
